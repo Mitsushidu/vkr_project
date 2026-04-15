@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Главная{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <div>
+        <p class="eyebrow">Электронный юридический сервис</p>
+        <h1>Первичная юридическая консультация в формате веб-подраздела</h1>
+        <p class="lead">Демонстрационный сайт условной юридической организации с выделенным разделом автоматизированного консультирования.</p>
+        <div class="button-row">
+            {% if request.user.is_authenticated %}
+                <a class="button primary" href="{% url 'consultation:index' %}">Перейти к консультации</a>
+            {% else %}
+                <a class="button primary" href="{% url 'login' %}">Войти в систему</a>
+            {% endif %}
+            <a class="button secondary" href="{% url 'services' %}">Посмотреть услуги</a>
+        </div>
+    </div>
+    <div class="hero-card">
+        <h2>Что уже реализовано</h2>
+        <ul>
+            <li>каркас сайта юридической компании;</li>
+            <li>модуль консультации с историей сеансов;</li>
+            <li>интеграционный слой для Ollama;</li>
+            <li>профили пользователей и роли;</li>
+            <li>административная панель для сотрудников.</li>
+        </ul>
+    </div>
+</section>
+{% endblock %}

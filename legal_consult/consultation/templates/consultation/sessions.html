@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}История обращений{% endblock %}
+
+{% block content %}
+<section class="content-card">
+    <h1>История обращений</h1>
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Заголовок</th>
+                    <th>Пользователь</th>
+                    <th>Статус</th>
+                    <th>Дата обновления</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for session in sessions %}
+                    <tr>
+                        <td>{{ session.pk }}</td>
+                        <td><a href="{% url 'consultation:session_detail' session.pk %}">{{ session.title|default:"Новая консультация" }}</a></td>
+                        <td>{{ session.user.username }}</td>
+                        <td>{{ session.get_status_display }}</td>
+                        <td>{{ session.updated_at|date:"d.m.Y H:i" }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="5">Сеансы отсутствуют.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

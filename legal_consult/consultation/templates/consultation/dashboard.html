@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}Панель сотрудника{% endblock %}
+
+{% block content %}
+<section class="content-card">
+    <h1>Панель сотрудника</h1>
+    <p class="muted">Страница предназначена для сотрудников, имеющих право просматривать все обращения.</p>
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Сеанс</th>
+                    <th>Пользователь</th>
+                    <th>Категория</th>
+                    <th>Статус</th>
+                    <th>Назначенный специалист</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for session in sessions %}
+                    <tr>
+                        <td><a href="{% url 'consultation:session_detail' session.pk %}">{{ session.title|default:"Новая консультация" }}</a></td>
+                        <td>{{ session.user.username }}</td>
+                        <td>{{ session.category|default:"—" }}</td>
+                        <td>{{ session.get_status_display }}</td>
+                        <td>{{ session.assigned_to|default:"—" }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="5">Данные отсутствуют.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

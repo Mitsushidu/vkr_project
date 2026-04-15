@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}Выход{% endblock %}
+
+{% block content %}
+<section class="content-card narrow-card">
+    <h1>Выход выполнен</h1>
+    <p>Вы успешно завершили сеанс работы.</p>
+    <a class="button primary" href="{% url 'home' %}">На главную</a>
+</section>
+{% endblock %}

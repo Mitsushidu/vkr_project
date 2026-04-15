@@ -1,0 +1,148 @@
+.consultation-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 20px;
+    align-items: start;
+}
+
+.consultation-sidebar {
+    position: sticky;
+    top: 24px;
+}
+
+.sidebar-card,
+.chat-card {
+    padding: 20px;
+}
+
+.sidebar-head,
+.chat-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+}
+
+.sidebar-head h1,
+.chat-header h2 {
+    margin: 0;
+}
+
+.session-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.session-item {
+    display: grid;
+    gap: 6px;
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+
+.session-item.active {
+    border-color: var(--primary);
+    box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.session-title {
+    font-weight: 600;
+}
+
+.session-meta,
+.chat-time {
+    color: var(--muted);
+    font-size: 0.88rem;
+}
+
+.status-badge {
+    background: rgba(127, 90, 58, 0.12);
+    color: var(--primary-dark);
+    border-radius: 999px;
+    padding: 9px 12px;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.chat-messages {
+    display: grid;
+    gap: 14px;
+    margin: 24px 0;
+    max-height: 60vh;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.chat-bubble {
+    display: grid;
+    gap: 8px;
+    max-width: 88%;
+    padding: 16px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+}
+
+.chat-bubble.user {
+    justify-self: end;
+    background: rgba(201, 166, 107, 0.2);
+}
+
+.chat-bubble.assistant,
+.chat-bubble.system {
+    justify-self: start;
+    background: var(--surface-alt);
+}
+
+.chat-bubble.error {
+    border-color: #c53030;
+    background: #fff5f5;
+}
+
+.chat-role {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--primary-dark);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.chat-text {
+    white-space: pre-wrap;
+    line-height: 1.6;
+}
+
+.chat-form {
+    display: grid;
+    gap: 14px;
+}
+
+.chat-textarea {
+    width: 100%;
+    min-height: 130px;
+    resize: vertical;
+    padding: 16px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    font: inherit;
+}
+
+.chat-placeholder {
+    padding: 26px;
+    background: var(--surface-alt);
+    border-radius: 16px;
+    border: 1px dashed var(--border);
+    color: var(--muted);
+}
+
+@media (max-width: 980px) {
+    .consultation-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .consultation-sidebar {
+        position: static;
+    }
+}

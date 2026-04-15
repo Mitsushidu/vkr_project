@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Консультация{% endblock %}
+
+{% block content %}
+<section class="consultation-layout">
+    <aside class="consultation-sidebar">
+        <div class="sidebar-card">
+            <div class="sidebar-head">
+                <h1>Сеансы консультации</h1>
+                <a class="button primary small" href="{% url 'consultation:new_session' %}">Новый сеанс</a>
+            </div>
+            <div class="session-list">
+                {% for session in sessions %}
+                    <a class="session-item {% if current_session and session.pk == current_session.pk %}active{% endif %}" href="{% url 'consultation:session_detail' session.pk %}">
+                        <span class="session-title">{{ session.title|default:"Новая консультация" }}</span>
+                        <span class="session-meta">{{ session.get_status_display }} · {{ session.updated_at|date:"d.m.Y H:i" }}</span>
+                    </a>
+                {% empty %}
+                    <p class="muted">Сеансы пока отсутствуют.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </aside>
+
+    <div class="chat-card">
+        {% if current_session %}
+            <div class="chat-header">
+                <div>
+                    <p class="eyebrow">Подраздел консультирования</p>
+                    <h2>{{ current_session.title|default:"Новая консультация" }}</h2>
+                </div>
+                <div class="status-badge">{{ current_session.get_status_display }}</div>
+            </div>
+
+            <div id="chat-messages" class="chat-messages">
+                {% for item in current_session.messages.all %}
+                    <article class="chat-bubble {{ item.role }} {% if item.is_error %}error{% endif %}">
+                        <div class="chat-role">{{ item.get_role_display }}</div>
+                        <div class="chat-text">{{ item.content|linebreaksbr }}</div>
+                        <div class="chat-time">{{ item.created_at|date:"d.m.Y H:i" }}</div>
+                    </article>
+                {% empty %}
+                    <div class="chat-placeholder">
+                        <p>Сеанс создан. Отправьте первый вопрос для запуска консультации.</p>
+                    </div>
+                {% endfor %}
+            </div>
+
+            <form id="chat-form" class="chat-form" method="post" action="{% url 'consultation:send_message_api' current_session.pk %}">
+                {% csrf_token %}
+                {{ message_form.content }}
+                <div class="form-actions">
+                    <p class="muted">Ответ формируется в демонстрационном режиме или через Ollama, если он подключён.</p>
+                    <button class="button primary" type="submit">Отправить</button>
+                </div>
+            </form>
+        {% else %}
+            <section class="content-card">
+                <h1>Раздел консультации</h1>
+                <p>Для начала работы создайте новый сеанс консультации.</p>
+                <a class="button primary" href="{% url 'consultation:new_session' %}">Создать сеанс</a>
+            </section>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

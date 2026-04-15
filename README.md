@@ -1,1 +1,57 @@
-# vkr_project
+# VKR Project — подраздел первичной юридической консультации
+
+Каркас Django-проекта для ВКР по разработке подраздела электронного ресурса первичной юридической консультации.
+
+## Стек
+- Python 3.12+
+- Django
+- PostgreSQL
+- Ollama (опционально, для генерации ответов)
+
+## Быстрый старт
+1. Создать и заполнить `.env` на основе `.env.example`.
+2. Поднять PostgreSQL:
+   ```bash
+   docker compose up -d
+   ```
+3. Установить зависимости:
+   ```bash
+   uv sync
+   ```
+4. Выполнить миграции:
+   ```bash
+   cd legal_consult
+   python manage.py migrate
+   ```
+5. Создать группы и базовые роли:
+   ```bash
+   python manage.py init_roles
+   python manage.py seed_categories
+   ```
+6. Создать суперпользователя:
+   ```bash
+   python manage.py createsuperuser
+   ```
+7. Запустить сервер:
+   ```bash
+   python manage.py runserver
+   ```
+
+## Структура проекта
+- `core` — информационные страницы сайта и общая оболочка.
+- `consultation` — логика консультационного подраздела, чат, история обращений, интеграция с Ollama.
+- `user` — профили пользователей и служебные команды инициализации ролей.
+- `templates` — базовые шаблоны.
+- `static` — общие стили и JavaScript.
+
+## Режимы работы LLM
+По умолчанию проект запускается в демонстрационном режиме (`OLLAMA_ENABLED=False`).
+В этом режиме ответы формируются локальной заглушкой, что позволяет показать интерфейс и БД без подключенной модели.
+
+Для работы с Ollama укажите в `.env`:
+```env
+OLLAMA_ENABLED=True
+OLLAMA_MODEL=llama3.1:8b
+OLLAMA_URL=http://localhost:11434
+OLLAMA_TIMEOUT=60
+```

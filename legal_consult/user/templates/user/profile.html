@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}Профиль{% endblock %}
+
+{% block content %}
+<section class="content-card narrow-card">
+    <h1>Профиль пользователя</h1>
+    <p><strong>Логин:</strong> {{ request.user.username }}</p>
+    <p><strong>Email:</strong> {{ request.user.email|default:"не указан" }}</p>
+    {% if request.user.profile %}
+        <p><strong>Телефон:</strong> {{ request.user.profile.phone|default:"не указан" }}</p>
+        <p><strong>Должность:</strong> {{ request.user.profile.position|default:"не указана" }}</p>
+    {% endif %}
+    <p><strong>Группы:</strong>
+        {% for group in request.user.groups.all %}
+            {{ group.name }}{% if not forloop.last %}, {% endif %}
+        {% empty %}
+            группы не назначены
+        {% endfor %}
+    </p>
+</section>
+{% endblock %}

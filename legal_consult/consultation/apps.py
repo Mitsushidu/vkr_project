@@ -2,4 +2,6 @@ from django.apps import AppConfig
 
 
 class ConsultationConfig(AppConfig):
-    name = 'consultation'
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "consultation"
+    verbose_name = "Консультационный модуль"
