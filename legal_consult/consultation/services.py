@@ -8,7 +8,7 @@ from typing import Any
 
 from django.conf import settings
 
-from .models import ConsultationSession
+from .models import ChatMessage, ConsultationSession
 
 
 @dataclass
@@ -24,10 +24,25 @@ class LLMResponse:
 
 class OllamaService:
     @staticmethod
-    def _build_messages(session: ConsultationSession) -> list[dict[str, str]]:
-        history = list(
-            session.messages.order_by("created_at").values("role", "content")[:20]
+    def _recent_session_messages(session: ConsultationSession) -> list[dict[str, str]]:
+        queryset = session.messages.filter(
+            is_error=False,
+            role__in=(ChatMessage.Role.USER, ChatMessage.Role.ASSISTANT),
         )
+        limit = settings.OLLAMA_SESSION_MEMORY_LIMIT
+
+        if limit > 0:
+            history = list(
+                queryset.order_by("-created_at", "-pk").values("role", "content")[:limit]
+            )
+            history.reverse()
+            return history
+
+        return list(queryset.order_by("created_at", "pk").values("role", "content"))
+
+    @classmethod
+    def _build_messages(cls, session: ConsultationSession) -> list[dict[str, str]]:
+        history = cls._recent_session_messages(session)
         return [
             {"role": "system", "content": settings.CONSULTATION_SYSTEM_PROMPT},
             *history,

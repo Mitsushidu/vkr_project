@@ -103,6 +103,7 @@ OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "False").lower() == "true"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "60"))
+OLLAMA_SESSION_MEMORY_LIMIT = int(os.getenv("OLLAMA_SESSION_MEMORY_LIMIT", "20"))
 
 CONSULTATION_SYSTEM_PROMPT = (
     "Ты выступаешь в роли системы первичной юридической консультации. "

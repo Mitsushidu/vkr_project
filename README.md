@@ -54,4 +54,7 @@ OLLAMA_ENABLED=True
 OLLAMA_MODEL=llama3.1:8b
 OLLAMA_URL=http://localhost:11434
 OLLAMA_TIMEOUT=60
+OLLAMA_SESSION_MEMORY_LIMIT=20
 ```
+
+`OLLAMA_SESSION_MEMORY_LIMIT` определяет, сколько последних сообщений из текущего диалога (`ConsultationSession`) передавать в модель как память. Контекст не шарится между разными диалогами.
