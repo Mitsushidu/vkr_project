@@ -21,8 +21,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+
     const content = textarea.value.trim();
     if (!content) return;
+
+    const formData = new FormData(form);   // сначала собираем данные
 
     const now = new Date();
     const time = now.toLocaleString("ru-RU", {
@@ -38,8 +41,6 @@ document.addEventListener("DOMContentLoaded", () => {
     submitButton.disabled = true;
     submitButton.textContent = "Отправка...";
 
-    const formData = new FormData(form);
-
     try {
       const response = await fetch(form.action, {
         method: "POST",
@@ -50,8 +51,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       const data = await response.json();
+
       if (!response.ok) {
-        throw new Error(data.detail || "Ошибка обработки сообщения");
+        const fieldError = data?.errors?.content?.[0];
+        throw new Error(fieldError || data.detail || "Ошибка обработки сообщения");
       }
 
       appendBubble(
