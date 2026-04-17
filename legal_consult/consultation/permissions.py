@@ -36,9 +36,7 @@ def get_visible_consultations_queryset(
     if user_can_view_all_consultations(user):
         return queryset
 
-    if any(user.has_perm(permission) for permission in SPECIALIST_WORK_PERMISSIONS):
-        return queryset.filter(
-            Q(user=user) | Q(assigned_to=user) | Q(assigned_to__isnull=True)
-        ).distinct()
+    if user.has_perm("consultation.can_change_consultation_status") or user.has_perm("consultation.can_close_consultation"):
+        return queryset.filter(Q(user=user) | Q(assigned_to=user)).distinct()
 
     return queryset.filter(user=user)
