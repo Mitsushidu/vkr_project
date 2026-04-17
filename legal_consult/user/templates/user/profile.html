@@ -8,6 +8,7 @@
     <p><strong>Логин:</strong> {{ request.user.username }}</p>
     <p><strong>Email:</strong> {{ request.user.email|default:"не указан" }}</p>
     {% if request.user.profile %}
+        <p><strong>Основная роль:</strong> {{ primary_role.name|default:"не назначена" }}</p>
         <p><strong>Телефон:</strong> {{ request.user.profile.phone|default:"не указан" }}</p>
         <p><strong>Должность:</strong> {{ request.user.profile.position|default:"не указана" }}</p>
     {% endif %}

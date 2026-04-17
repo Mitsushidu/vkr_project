@@ -8,8 +8,11 @@ MANAGE_USERS_PERMISSION = "user.can_manage_users"
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ("user", "phone", "position")
+    list_display = ("user", "primary_role", "phone", "position")
+    list_filter = ("primary_role",)
     search_fields = ("user__username", "user__email", "phone", "position")
+    autocomplete_fields = ("user",)
+    fields = ("user", "primary_role", "middle_name", "phone", "position")
 
     def has_module_permission(self, request):
         return super().has_module_permission(request) or request.user.has_perm(
