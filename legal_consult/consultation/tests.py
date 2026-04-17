@@ -4,9 +4,9 @@ from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import ChatMessage, ConsultationSession
+from .models import ChatMessage, ConsultationCategory, ConsultationSession
 from .services import OllamaService
-from user.roles import ROLE_HEAD, ROLE_LAWYER, assign_primary_role
+from user.roles import ROLE_HEAD, ROLE_LAWYER, ROLE_SUPPORT, assign_primary_role
 
 
 class ConsultationViewsTests(TestCase):
@@ -87,28 +87,40 @@ class ConsultationPermissionsTests(TestCase):
             username="supervisor",
             password="supervisor-pass",
         )
+        self.support = get_user_model().objects.create_user(
+            username="support",
+            password="support-pass",
+        )
         self.assigned_peer = get_user_model().objects.create_user(
             username="assigned-peer",
             password="peer-pass",
+        )
+        self.category = ConsultationCategory.objects.create(
+            name="Семейное право",
+            slug="family-law",
         )
 
         self.owner_session = ConsultationSession.objects.create(
             user=self.owner,
             title="Сессия владельца",
+            category=self.category,
         )
         self.available_session = ConsultationSession.objects.create(
             user=self.other_user,
             title="Свободная сессия",
+            category=self.category,
         )
         self.assigned_session = ConsultationSession.objects.create(
             user=self.other_user,
             assigned_to=self.lawyer,
             title="Назначенная юристу",
+            category=self.category,
         )
         self.foreign_assigned_session = ConsultationSession.objects.create(
             user=self.other_user,
             assigned_to=self.assigned_peer,
             title="Назначенная другому специалисту",
+            category=self.category,
         )
 
     def test_custom_permissions_are_created(self):
@@ -168,3 +180,109 @@ class ConsultationPermissionsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(list(response.context["sessions"]), [self.owner_session])
+
+    def test_employee_with_permission_can_change_status(self):
+        assign_primary_role(self.support, ROLE_SUPPORT)
+        self.client.login(username="support", password="support-pass")
+
+        response = self.client.post(
+            reverse("consultation:change_consultation_status", kwargs={"pk": self.available_session.pk}),
+            {"status": ConsultationSession.Status.IN_PROGRESS},
+        )
+
+        self.available_session.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.available_session.status, ConsultationSession.Status.IN_PROGRESS)
+
+    def test_regular_user_cannot_change_status(self):
+        self.client.login(username="owner", password="owner-pass")
+
+        response = self.client.post(
+            reverse("consultation:change_consultation_status", kwargs={"pk": self.owner_session.pk}),
+            {"status": ConsultationSession.Status.IN_PROGRESS},
+        )
+
+        self.owner_session.refresh_from_db()
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.owner_session.status, ConsultationSession.Status.NEW)
+
+    def test_head_can_assign_executor_and_change_category(self):
+        assign_primary_role(self.supervisor, ROLE_HEAD)
+        assign_primary_role(self.lawyer, ROLE_LAWYER)
+        second_category = ConsultationCategory.objects.create(
+            name="Трудовое право",
+            slug="labor-law",
+        )
+        self.client.login(username="supervisor", password="supervisor-pass")
+
+        response = self.client.post(
+            reverse("consultation:assign_consultation", kwargs={"pk": self.available_session.pk}),
+            {
+                "assigned_to": self.lawyer.pk,
+                "category": second_category.pk,
+            },
+        )
+
+        self.available_session.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.available_session.assigned_to, self.lawyer)
+        self.assertEqual(self.available_session.category, second_category)
+
+    def test_employee_with_permission_can_mark_requires_specialist(self):
+        assign_primary_role(self.support, ROLE_SUPPORT)
+        self.client.login(username="support", password="support-pass")
+
+        response = self.client.post(
+            reverse(
+                "consultation:mark_consultation_requires_specialist",
+                kwargs={"pk": self.available_session.pk},
+            ),
+            {"requires_specialist": "true"},
+        )
+
+        self.available_session.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(self.available_session.requires_specialist)
+
+    def test_close_consultation_works_only_with_close_permission(self):
+        self.assigned_session.status = ConsultationSession.Status.COMPLETED
+        self.assigned_session.save(update_fields=["status", "updated_at"])
+        assign_primary_role(self.lawyer, ROLE_LAWYER)
+        self.client.login(username="lawyer", password="lawyer-pass")
+
+        response = self.client.post(
+            reverse("consultation:close_consultation", kwargs={"pk": self.assigned_session.pk}),
+            {},
+        )
+
+        self.assigned_session.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.assigned_session.status, ConsultationSession.Status.CLOSED)
+
+    def test_close_consultation_is_forbidden_without_permission(self):
+        self.available_session.status = ConsultationSession.Status.COMPLETED
+        self.available_session.save(update_fields=["status", "updated_at"])
+        assign_primary_role(self.support, ROLE_SUPPORT)
+        self.client.login(username="support", password="support-pass")
+
+        response = self.client.post(
+            reverse("consultation:close_consultation", kwargs={"pk": self.available_session.pk}),
+            {},
+        )
+
+        self.available_session.refresh_from_db()
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.available_session.status, ConsultationSession.Status.COMPLETED)
+
+    def test_invalid_status_transition_is_not_applied(self):
+        assign_primary_role(self.support, ROLE_SUPPORT)
+        self.client.login(username="support", password="support-pass")
+
+        response = self.client.post(
+            reverse("consultation:change_consultation_status", kwargs={"pk": self.available_session.pk}),
+            {"status": ConsultationSession.Status.COMPLETED},
+        )
+
+        self.available_session.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.available_session.status, ConsultationSession.Status.NEW)

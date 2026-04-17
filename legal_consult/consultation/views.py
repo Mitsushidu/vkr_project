@@ -1,14 +1,25 @@
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
+from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import DetailView, ListView, RedirectView
 
-from .forms import ChatMessageForm
+from .forms import (
+    ChatMessageForm,
+    ConsultationAssignmentForm,
+    ConsultationCloseForm,
+    ConsultationRequiresSpecialistForm,
+    ConsultationStatusForm,
+)
 from .models import ChatMessage, ConsultationCategory, ConsultationSession, LLMInteractionLog
 from .permissions import (
+    ASSIGN_CONSULTATION_PERMISSION,
+    CHANGE_CONSULTATION_STATUS_PERMISSION,
+    CLOSE_CONSULTATION_PERMISSION,
+    MARK_NEEDS_SPECIALIST_PERMISSION,
     VIEW_ALL_CONSULTATIONS_PERMISSION,
     get_visible_consultations_queryset,
 )
@@ -80,6 +91,96 @@ class AllSessionsView(PermissionRequiredMixin, ListView):
 
     def get_queryset(self):
         return ConsultationSession.objects.select_related("category", "assigned_to", "user")
+
+
+def _get_visible_session_for_action(request, pk: int) -> ConsultationSession:
+    queryset = ConsultationSession.objects.select_related("category", "assigned_to", "user")
+    return get_object_or_404(get_visible_consultations_queryset(request.user, queryset), pk=pk)
+
+
+def _redirect_to_session(session: ConsultationSession):
+    return redirect("consultation:session_detail", pk=session.pk)
+
+
+@require_POST
+def assign_consultation(request, pk: int):
+    if not request.user.is_authenticated:
+        raise PermissionDenied
+    if not request.user.has_perm(ASSIGN_CONSULTATION_PERMISSION):
+        raise PermissionDenied
+
+    session = _get_visible_session_for_action(request, pk)
+    form = ConsultationAssignmentForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Не удалось обновить исполнителя или категорию обращения.")
+        return _redirect_to_session(session)
+
+    session.assigned_to = form.cleaned_data["assigned_to"]
+    session.category = form.cleaned_data["category"]
+    session.save(update_fields=["assigned_to", "category", "updated_at"])
+    messages.success(request, "Исполнитель и категория обращения обновлены.")
+    return _redirect_to_session(session)
+
+
+@require_POST
+def change_consultation_status(request, pk: int):
+    if not request.user.is_authenticated:
+        raise PermissionDenied
+    if not request.user.has_perm(CHANGE_CONSULTATION_STATUS_PERMISSION):
+        raise PermissionDenied
+
+    session = _get_visible_session_for_action(request, pk)
+    form = ConsultationStatusForm(request.POST, session=session)
+    if not form.is_valid():
+        messages.error(request, "Недопустимый переход статуса обращения.")
+        return _redirect_to_session(session)
+
+    session.status = form.cleaned_data["status"]
+    if session.status == ConsultationSession.Status.NEEDS_SPECIALIST:
+        session.requires_specialist = True
+        session.save(update_fields=["status", "requires_specialist", "updated_at"])
+    else:
+        session.save(update_fields=["status", "updated_at"])
+    messages.success(request, "Статус обращения обновлён.")
+    return _redirect_to_session(session)
+
+
+@require_POST
+def mark_consultation_requires_specialist(request, pk: int):
+    if not request.user.is_authenticated:
+        raise PermissionDenied
+    if not request.user.has_perm(MARK_NEEDS_SPECIALIST_PERMISSION):
+        raise PermissionDenied
+
+    session = _get_visible_session_for_action(request, pk)
+    form = ConsultationRequiresSpecialistForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Не удалось обновить признак привлечения специалиста.")
+        return _redirect_to_session(session)
+
+    session.requires_specialist = form.cleaned_data["requires_specialist"]
+    session.save(update_fields=["requires_specialist", "updated_at"])
+    messages.success(request, "Признак привлечения специалиста обновлён.")
+    return _redirect_to_session(session)
+
+
+@require_POST
+def close_consultation(request, pk: int):
+    if not request.user.is_authenticated:
+        raise PermissionDenied
+    if not request.user.has_perm(CLOSE_CONSULTATION_PERMISSION):
+        raise PermissionDenied
+
+    session = _get_visible_session_for_action(request, pk)
+    form = ConsultationCloseForm(request.POST, session=session)
+    if not form.is_valid():
+        messages.error(request, "Закрытие обращения недоступно в текущем статусе.")
+        return _redirect_to_session(session)
+
+    session.status = ConsultationSession.Status.CLOSED
+    session.save(update_fields=["status", "updated_at"])
+    messages.success(request, "Обращение закрыто.")
+    return _redirect_to_session(session)
 
 
 @require_POST
