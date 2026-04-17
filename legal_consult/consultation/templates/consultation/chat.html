@@ -33,6 +33,74 @@
                 <div class="status-badge">{{ current_session.get_status_display }}</div>
             </div>
 
+            {% if show_staff_actions %}
+                <section class="staff-actions-card">
+                    <div class="staff-actions-head">
+                        <div>
+                            <p class="eyebrow">Служебные действия</p>
+                            <h3>Управление обращением</h3>
+                        </div>
+                    </div>
+
+                    <dl class="staff-summary">
+                        <div>
+                            <dt>Статус</dt>
+                            <dd>{{ current_session.get_status_display }}</dd>
+                        </div>
+                        <div>
+                            <dt>Категория</dt>
+                            <dd>{{ current_session.category|default:"Не указана" }}</dd>
+                        </div>
+                        <div>
+                            <dt>Исполнитель</dt>
+                            <dd>{{ current_session.assigned_to|default:"Не назначен" }}</dd>
+                        </div>
+                        <div>
+                            <dt>Требует специалиста</dt>
+                            <dd>{% if current_session.requires_specialist %}Да{% else %}Нет{% endif %}</dd>
+                        </div>
+                    </dl>
+
+                    <div class="staff-forms">
+                        {% if can_assign_consultation and assignment_form %}
+                            <form class="staff-form" method="post" action="{% url 'consultation:assign_consultation' current_session.pk %}">
+                                {% csrf_token %}
+                                <h4>Назначение и категория</h4>
+                                {{ assignment_form.as_p }}
+                                <button class="button secondary small" type="submit">Сохранить назначение</button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_change_consultation_status and status_form and status_form.fields.status.choices %}
+                            <form class="staff-form" method="post" action="{% url 'consultation:change_consultation_status' current_session.pk %}">
+                                {% csrf_token %}
+                                <h4>Смена статуса</h4>
+                                {{ status_form.as_p }}
+                                <button class="button secondary small" type="submit">Изменить статус</button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_mark_needs_specialist and requires_specialist_form %}
+                            <form class="staff-form" method="post" action="{% url 'consultation:mark_consultation_requires_specialist' current_session.pk %}">
+                                {% csrf_token %}
+                                <h4>Признак специалиста</h4>
+                                {{ requires_specialist_form.as_p }}
+                                <button class="button secondary small" type="submit">Обновить признак</button>
+                            </form>
+                        {% endif %}
+
+                        {% if can_close_consultation and close_form %}
+                            <form class="staff-form" method="post" action="{% url 'consultation:close_consultation' current_session.pk %}">
+                                {% csrf_token %}
+                                <h4>Закрытие обращения</h4>
+                                <p class="muted">Доступно только для обращений в статусе «Завершено».</p>
+                                <button class="button secondary small" type="submit">Закрыть обращение</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                </section>
+            {% endif %}
+
             <div id="chat-messages" class="chat-messages">
                 {% for item in current_session.messages.all %}
                     <article class="chat-bubble {{ item.role }} {% if item.is_error %}error{% endif %}">

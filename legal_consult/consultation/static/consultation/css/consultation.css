@@ -67,6 +67,73 @@
     font-weight: 600;
 }
 
+.staff-actions-card {
+    margin-top: 20px;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--surface-alt);
+}
+
+.staff-actions-head h3,
+.staff-form h4 {
+    margin: 0;
+}
+
+.staff-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 18px;
+    margin: 18px 0;
+}
+
+.staff-summary div {
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid var(--border);
+}
+
+.staff-summary dt {
+    margin-bottom: 6px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.staff-summary dd {
+    margin: 0;
+    font-weight: 600;
+}
+
+.staff-forms {
+    display: grid;
+    gap: 14px;
+}
+
+.staff-form {
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: #fff;
+}
+
+.staff-form p {
+    margin-top: 0;
+}
+
+.staff-form select,
+.staff-form input,
+.staff-form textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    font: inherit;
+}
+
 .chat-messages {
     display: grid;
     gap: 14px;
@@ -144,5 +211,9 @@
 
     .consultation-sidebar {
         position: static;
+    }
+
+    .staff-summary {
+        grid-template-columns: 1fr;
     }
 }

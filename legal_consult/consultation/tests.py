@@ -286,3 +286,86 @@ class ConsultationPermissionsTests(TestCase):
         self.available_session.refresh_from_db()
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self.available_session.status, ConsultationSession.Status.NEW)
+
+    def test_regular_user_does_not_see_staff_actions_block(self):
+        self.client.login(username="owner", password="owner-pass")
+
+        response = self.client.get(
+            reverse("consultation:session_detail", kwargs={"pk": self.owner_session.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, "Служебные действия")
+        self.assertFalse(response.context["show_staff_actions"])
+
+    def test_support_user_sees_staff_actions_block(self):
+        assign_primary_role(self.support, ROLE_SUPPORT)
+        self.client.login(username="support", password="support-pass")
+
+        response = self.client.get(
+            reverse("consultation:session_detail", kwargs={"pk": self.available_session.pk})
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Служебные действия")
+        self.assertTrue(response.context["show_staff_actions"])
+        self.assertTrue(response.context["can_change_consultation_status"])
+        self.assertTrue(response.context["can_mark_needs_specialist"])
+        self.assertFalse(response.context["can_assign_consultation"])
+        self.assertFalse(response.context["can_close_consultation"])
+
+    def test_ui_shows_only_actions_allowed_by_permissions(self):
+        assign_primary_role(self.support, ROLE_SUPPORT)
+        self.client.login(username="support", password="support-pass")
+
+        response = self.client.get(
+            reverse("consultation:session_detail", kwargs={"pk": self.available_session.pk})
+        )
+
+        self.assertContains(
+            response,
+            reverse("consultation:change_consultation_status", kwargs={"pk": self.available_session.pk}),
+        )
+        self.assertContains(
+            response,
+            reverse(
+                "consultation:mark_consultation_requires_specialist",
+                kwargs={"pk": self.available_session.pk},
+            ),
+        )
+        self.assertNotContains(
+            response,
+            reverse("consultation:assign_consultation", kwargs={"pk": self.available_session.pk}),
+        )
+        self.assertNotContains(
+            response,
+            reverse("consultation:close_consultation", kwargs={"pk": self.available_session.pk}),
+        )
+
+    def test_head_ui_shows_assignment_but_not_specialist_toggle(self):
+        assign_primary_role(self.supervisor, ROLE_HEAD)
+        self.client.login(username="supervisor", password="supervisor-pass")
+
+        response = self.client.get(
+            reverse("consultation:session_detail", kwargs={"pk": self.available_session.pk})
+        )
+
+        self.assertContains(
+            response,
+            reverse("consultation:assign_consultation", kwargs={"pk": self.available_session.pk}),
+        )
+        self.assertContains(
+            response,
+            reverse("consultation:change_consultation_status", kwargs={"pk": self.available_session.pk}),
+        )
+        self.assertContains(
+            response,
+            reverse("consultation:close_consultation", kwargs={"pk": self.available_session.pk}),
+        )
+        self.assertNotContains(
+            response,
+            reverse(
+                "consultation:mark_consultation_requires_specialist",
+                kwargs={"pk": self.available_session.pk},
+            ),
+        )

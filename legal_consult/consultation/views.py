@@ -26,6 +26,46 @@ from .permissions import (
 from .services import OllamaService
 
 
+def _build_staff_actions_context(user, session: ConsultationSession | None) -> dict:
+    if session is None or not user.is_authenticated:
+        return {
+            "show_staff_actions": False,
+            "can_assign_consultation": False,
+            "can_change_consultation_status": False,
+            "can_mark_needs_specialist": False,
+            "can_close_consultation": False,
+            "assignment_form": None,
+            "status_form": None,
+            "requires_specialist_form": None,
+            "close_form": None,
+        }
+
+    can_assign = user.has_perm(ASSIGN_CONSULTATION_PERMISSION)
+    can_change_status = user.has_perm(CHANGE_CONSULTATION_STATUS_PERMISSION)
+    can_mark_specialist = user.has_perm(MARK_NEEDS_SPECIALIST_PERMISSION)
+    can_close = user.has_perm(CLOSE_CONSULTATION_PERMISSION)
+
+    return {
+        "show_staff_actions": any((can_assign, can_change_status, can_mark_specialist, can_close)),
+        "can_assign_consultation": can_assign,
+        "can_change_consultation_status": can_change_status,
+        "can_mark_needs_specialist": can_mark_specialist,
+        "can_close_consultation": can_close,
+        "assignment_form": ConsultationAssignmentForm(
+            initial={"assigned_to": session.assigned_to_id, "category": session.category_id}
+        )
+        if can_assign
+        else None,
+        "status_form": ConsultationStatusForm(session=session) if can_change_status else None,
+        "requires_specialist_form": ConsultationRequiresSpecialistForm(
+            initial={"requires_specialist": "true" if session.requires_specialist else "false"}
+        )
+        if can_mark_specialist
+        else None,
+        "close_form": ConsultationCloseForm(session=session) if can_close else None,
+    }
+
+
 class ConsultationIndexView(LoginRequiredMixin, ListView):
     template_name = "consultation/chat.html"
     context_object_name = "sessions"
@@ -40,6 +80,7 @@ class ConsultationIndexView(LoginRequiredMixin, ListView):
         context["current_session"] = current_session
         context["message_form"] = ChatMessageForm()
         context["categories"] = ConsultationCategory.objects.filter(is_active=True)
+        context.update(_build_staff_actions_context(self.request.user, current_session))
         return context
 
 
@@ -65,6 +106,7 @@ class SessionDetailView(LoginRequiredMixin, DetailView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        current_session = self.object
         sessions = get_visible_consultations_queryset(
             self.request.user,
             ConsultationSession.objects.select_related("category", "assigned_to", "user"),
@@ -72,6 +114,7 @@ class SessionDetailView(LoginRequiredMixin, DetailView):
         context["sessions"] = sessions
         context["message_form"] = ChatMessageForm()
         context["categories"] = ConsultationCategory.objects.filter(is_active=True)
+        context.update(_build_staff_actions_context(self.request.user, current_session))
         return context
 
 
