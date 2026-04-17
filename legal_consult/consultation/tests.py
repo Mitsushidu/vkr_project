@@ -631,6 +631,33 @@ class ConsultationRoutingTests(TestCase):
         self.assertEqual(response.status, "success")
         mocked.assert_called_once()
 
+    def test_clarification_questions_are_limited_to_two_by_default(self):
+        analysis = ConsultationAnalysis.from_payload(
+            {
+                "scenario": ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
+                "category": ConsultationSession.AnalysisCategory.CIVIL,
+                "is_typical": True,
+                "has_enough_information": False,
+                "needs_specialist": False,
+                "needs_clarification": True,
+                "confidence": 0.31,
+                "missing_information": [
+                    "Точная дата события",
+                    "Какие документы есть",
+                    "Был ли официальный ответ",
+                ],
+                "clarifying_questions": [
+                    "Когда произошло событие?",
+                    "Какие документы у вас есть на руках?",
+                    "Получали ли вы официальный ответ?",
+                ],
+                "short_reason": "Для безопасного ответа пока не хватает базовых обстоятельств.",
+            }
+        )
+
+        self.assertEqual(len(analysis.clarifying_questions), 2)
+        self.assertEqual(len(analysis.missing_information), 2)
+
     def test_complex_case_escalates_only_in_extreme_scenario(self):
         user_message = ChatMessage.objects.create(
             session=self.session,
@@ -672,6 +699,179 @@ class ConsultationRoutingTests(TestCase):
         self.assertEqual(self.session.status, ConsultationSession.Status.NEEDS_SPECIALIST)
         self.assertTrue(self.session.requires_specialist)
         self.assertFalse(self.session.awaiting_clarification)
+
+    def test_general_sanction_question_prefers_typical_answer(self):
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Что грозит за хранение наркотиков без цели сбыта?",
+        )
+        analysis = self._analysis(
+            scenario=ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
+            category=ConsultationSession.AnalysisCategory.CIVIL,
+            has_enough_information=False,
+            needs_clarification=True,
+            confidence=0.58,
+            missing_information=["Точное вещество"],
+            clarifying_questions=["Какое именно вещество фигурирует в ситуации?"],
+            short_reason="Неизвестно точное вещество.",
+        )
+
+        with patch.object(
+            OllamaService,
+            "_analyze_user_message_with_trace",
+            return_value=(
+                analysis,
+                LLMResponse(
+                    text='{"scenario":"needs_clarification"}',
+                    status="success",
+                    model_name="demo-model",
+                ),
+            ),
+        ), patch.object(
+            OllamaService,
+            "generate_response_for_analysis",
+            return_value=LLMResponse(
+                text="Краткий вывод:\nМожно дать общий первичный ответ с оговорками.",
+                status="success",
+                model_name="demo-model",
+            ),
+        ):
+            processed = OllamaService.process_user_message(self.session, user_message)
+
+        self.assertEqual(processed.analysis.scenario, ConsultationSession.AnalysisScenario.TYPICAL_ANSWER)
+        self.assertFalse(processed.analysis.needs_specialist)
+
+    def test_after_substantive_clarification_system_prefers_typical_answer(self):
+        ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Что грозит за хранение марихуаны?",
+        )
+        ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.ASSISTANT,
+            content=(
+                "Для первичной консультации нужно уточнить несколько обстоятельств.\n"
+                "1. Какое количество вещества?\n"
+                "2. Есть ли судимости и признаки сбыта?"
+            ),
+        )
+        self.session.awaiting_clarification = True
+        self.session.save(update_fields=["awaiting_clarification", "updated_at"])
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Речь о хранении 1 грамма марихуаны, вещество найдено в машине, судимостей нет, предметов для сбыта не было.",
+        )
+        analysis = self._analysis(
+            scenario=ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
+            category=ConsultationSession.AnalysisCategory.CIVIL,
+            has_enough_information=False,
+            needs_clarification=True,
+            confidence=0.63,
+            missing_information=[
+                "Количество вещества",
+                "Есть ли судимости",
+                "Есть ли признаки сбыта",
+            ],
+            clarifying_questions=[
+                "Какое количество вещества фигурирует в ситуации?",
+                "Есть ли судимости?",
+                "Есть ли признаки сбыта?",
+            ],
+            short_reason="Модель пытается запросить те же обстоятельства повторно.",
+        )
+
+        with patch.object(
+            OllamaService,
+            "_analyze_user_message_with_trace",
+            return_value=(
+                analysis,
+                LLMResponse(
+                    text='{"scenario":"needs_clarification"}',
+                    status="success",
+                    model_name="demo-model",
+                ),
+            ),
+        ), patch.object(
+            OllamaService,
+            "generate_response_for_analysis",
+            return_value=LLMResponse(
+                text="Краткий вывод:\nНа этой стадии можно дать первичный справочный ответ с оговорками.",
+                status="success",
+                model_name="demo-model",
+            ),
+        ):
+            processed = OllamaService.process_user_message(self.session, user_message)
+
+        self.assertEqual(processed.analysis.scenario, ConsultationSession.AnalysisScenario.TYPICAL_ANSWER)
+        self.assertEqual(processed.analysis.clarifying_questions, [])
+        self.session.refresh_from_db()
+        self.assertFalse(self.session.awaiting_clarification)
+
+    def test_known_facts_are_not_requested_again_in_second_clarification(self):
+        ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.ASSISTANT,
+            content=(
+                "Для первичной консультации нужно уточнить несколько обстоятельств.\n"
+                "1. Когда нашли вещество?\n"
+                "2. Есть ли судимости?"
+            ),
+        )
+        self.session.awaiting_clarification = True
+        self.session.save(update_fields=["awaiting_clarification", "updated_at"])
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Нашли вчера.",
+        )
+        analysis = self._analysis(
+            scenario=ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
+            category=ConsultationSession.AnalysisCategory.CIVIL,
+            has_enough_information=False,
+            needs_clarification=True,
+            confidence=0.34,
+            missing_information=[
+                "вчера",
+                "Есть ли предметы для сбыта",
+            ],
+            clarifying_questions=[
+                "Когда нашли вещество?",
+                "Были ли предметы для сбыта?",
+            ],
+            short_reason="Данных всё ещё мало, но часть уже известна.",
+        )
+
+        adjusted = OllamaService._adjust_analysis_for_context(
+            self.session,
+            user_message,
+            analysis,
+            was_awaiting_clarification=True,
+        )
+
+        self.assertEqual(adjusted.scenario, ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION)
+        self.assertEqual(adjusted.clarifying_questions, ["Были ли предметы для сбыта?"])
+        self.assertEqual(adjusted.missing_information, ["Есть ли предметы для сбыта"])
+
+    def test_specialist_escalation_is_not_used_instead_of_primary_answer(self):
+        analysis = ConsultationAnalysis.from_payload(
+            {
+                "scenario": ConsultationSession.AnalysisScenario.NEEDS_SPECIALIST,
+                "category": ConsultationSession.AnalysisCategory.CIVIL,
+                "is_typical": True,
+                "has_enough_information": False,
+                "needs_specialist": True,
+                "needs_clarification": False,
+                "confidence": 0.44,
+                "missing_information": ["Точное количество вещества"],
+                "clarifying_questions": [],
+                "short_reason": "Случай ещё не выглядит high-risk.",
+            }
+        )
+
+        self.assertNotEqual(analysis.scenario, ConsultationSession.AnalysisScenario.NEEDS_SPECIALIST)
 
     def test_low_confidence_specialist_scenario_is_downgraded_to_clarification(self):
         analysis = ConsultationAnalysis.from_payload(
@@ -772,6 +972,24 @@ class ConsultationRoutingTests(TestCase):
         self.assertEqual(analysis.scenario, ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION)
         self.assertTrue(analysis.needs_clarification)
         self.assertFalse(analysis.needs_specialist)
+
+    def test_typical_answer_is_allowed_with_reasonable_caveats(self):
+        analysis = ConsultationAnalysis.from_payload(
+            {
+                "scenario": ConsultationSession.AnalysisScenario.TYPICAL_ANSWER,
+                "category": ConsultationSession.AnalysisCategory.CIVIL,
+                "is_typical": True,
+                "has_enough_information": False,
+                "needs_specialist": False,
+                "needs_clarification": True,
+                "confidence": 0.64,
+                "missing_information": ["Точная дата события"],
+                "clarifying_questions": ["Когда именно произошло событие?"],
+                "short_reason": "Можно ответить в общем виде с оговорками.",
+            }
+        )
+
+        self.assertEqual(analysis.scenario, ConsultationSession.AnalysisScenario.TYPICAL_ANSWER)
 
     def test_manual_specialist_mode_is_not_reset_by_auto_analysis(self):
         self.session.status = ConsultationSession.Status.NEEDS_SPECIALIST

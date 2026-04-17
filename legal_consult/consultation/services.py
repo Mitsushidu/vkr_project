@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -14,8 +15,10 @@ from .prompts import BASE_SYSTEM_PROMPT, PROMPTS
 
 
 AUTO_ESCALATION_CONFIDENCE_THRESHOLD = 0.85
-MAX_CLARIFYING_QUESTIONS = 3
+MAX_CLARIFYING_QUESTIONS = 2
 TRACE_PREVIEW_LENGTH = 400
+MIN_SUBSTANTIVE_DETAIL_TOKENS = 6
+GENERAL_ANSWER_CONFIDENCE_THRESHOLD = 0.4
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +76,55 @@ DEFAULT_CLARIFYING_QUESTIONS = [
     "На каком этапе находится вопрос сейчас: только возник спор, уже подано заявление или есть официальный ответ?",
     "Есть ли документы, даты, суммы или иные конкретные данные, которые могут повлиять на первичный вывод?",
 ]
+
+GENERAL_REFERENCE_KEYWORDS = (
+    "что грозит",
+    "какое наказание",
+    "какая санкция",
+    "какая ответственность",
+    "что будет",
+    "какие последствия",
+    "общий порядок",
+    "порядок действий",
+    "как действовать",
+    "что делать",
+)
+
+IGNORED_COMPARISON_TOKENS = {
+    "есть",
+    "если",
+    "только",
+    "можно",
+    "нужно",
+    "какие",
+    "какое",
+    "какая",
+    "какой",
+    "каким",
+    "каких",
+    "какому",
+    "нужно",
+    "надо",
+    "нужен",
+    "нужна",
+    "ли",
+    "или",
+    "для",
+    "это",
+    "этот",
+    "эта",
+    "эти",
+    "уже",
+    "где",
+    "когда",
+    "каким",
+    "какой",
+    "какая",
+    "какие",
+    "были",
+    "было",
+    "есть",
+}
 
 RESPONSE_PROMPT_KEYS = {
     ConsultationSession.AnalysisScenario.TYPICAL_ANSWER: "typical_answer",
@@ -226,8 +278,11 @@ class ConsultationAnalysis:
         ):
             scenario = ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION
 
-        if scenario == ConsultationSession.AnalysisScenario.TYPICAL_ANSWER and (
-            not self.has_enough_information or self.needs_clarification
+        if (
+            scenario == ConsultationSession.AnalysisScenario.TYPICAL_ANSWER
+            and not self.has_enough_information
+            and self.needs_clarification
+            and confidence < GENERAL_ANSWER_CONFIDENCE_THRESHOLD
         ):
             scenario = ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION
 
@@ -324,6 +379,100 @@ class OllamaService:
     def _trace(cls, event: str, **payload: Any) -> None:
         serialized_payload = json.dumps(payload, ensure_ascii=False, default=str)
         logger.warning("consultation.llm.%s %s", event, serialized_payload)
+
+    @staticmethod
+    def _meaningful_tokens(text: str) -> list[str]:
+        tokens = re.findall(r"[a-zA-Zа-яА-Я0-9]+", (text or "").lower())
+        return [
+            token
+            for token in tokens
+            if len(token) >= 4 and token not in IGNORED_COMPARISON_TOKENS
+        ]
+
+    @classmethod
+    def _has_similar_token(cls, token: str, text_tokens: list[str]) -> bool:
+        token_prefix = token[:4]
+        return any(
+            token == text_token
+            or token.startswith(text_token[:4])
+            or text_token.startswith(token_prefix)
+            for text_token in text_tokens
+        )
+
+    @classmethod
+    def _history_covers_item(cls, item: str, user_history_text: str) -> bool:
+        tokens = cls._meaningful_tokens(item)
+        if not tokens:
+            return False
+        history_tokens = cls._meaningful_tokens(user_history_text)
+        matched_tokens = [token for token in tokens if cls._has_similar_token(token, history_tokens)]
+        required_matches = 1 if len(tokens) == 1 else 2
+        return len(matched_tokens) >= required_matches
+
+    @classmethod
+    def _question_was_already_asked(cls, question: str, assistant_text: str) -> bool:
+        question_text = " ".join((question or "").lower().split())
+        assistant_text = " ".join((assistant_text or "").lower().split())
+        if not question_text or not assistant_text:
+            return False
+        if question_text in assistant_text:
+            return True
+        tokens = cls._meaningful_tokens(question_text)
+        assistant_tokens = cls._meaningful_tokens(assistant_text)
+        if len(tokens) < 2:
+            return False
+        return sum(cls._has_similar_token(token, assistant_tokens) for token in tokens) >= 2
+
+    @classmethod
+    def _is_general_reference_question(cls, text: str) -> bool:
+        lowered = " ".join((text or "").lower().split())
+        return any(keyword in lowered for keyword in GENERAL_REFERENCE_KEYWORDS)
+
+    @classmethod
+    def _has_substantial_new_details(cls, text: str) -> bool:
+        normalized = " ".join((text or "").split())
+        tokens = cls._meaningful_tokens(normalized)
+        has_structured_detail = any(marker in normalized for marker in [",", ";", ":"]) or bool(
+            re.search(r"\d", normalized)
+        )
+        return len(tokens) >= MIN_SUBSTANTIVE_DETAIL_TOKENS or (
+            has_structured_detail and len(tokens) >= 4
+        )
+
+    @classmethod
+    def _recent_assistant_message_text(
+        cls,
+        session: ConsultationSession,
+        before_message_id: int | None = None,
+    ) -> str:
+        queryset = session.messages.filter(role=ChatMessage.Role.ASSISTANT)
+        if before_message_id is not None:
+            queryset = queryset.filter(pk__lt=before_message_id)
+        return queryset.order_by("-created_at", "-pk").values_list("content", flat=True).first() or ""
+
+    @classmethod
+    def _user_history_text(cls, session: ConsultationSession) -> str:
+        user_messages = session.messages.filter(role=ChatMessage.Role.USER).order_by("created_at", "pk")
+        return "\n".join(user_messages.values_list("content", flat=True)).lower()
+
+    @classmethod
+    def _promote_to_typical_answer(
+        cls,
+        analysis: ConsultationAnalysis,
+        reason: str,
+    ) -> ConsultationAnalysis:
+        return ConsultationAnalysis(
+            scenario=ConsultationSession.AnalysisScenario.TYPICAL_ANSWER,
+            category=analysis.category,
+            is_typical=True,
+            has_enough_information=True,
+            needs_clarification=False,
+            needs_specialist=False,
+            confidence=max(analysis.confidence, GENERAL_ANSWER_CONFIDENCE_THRESHOLD),
+            missing_information=analysis.missing_information[:MAX_CLARIFYING_QUESTIONS],
+            clarifying_questions=[],
+            short_reason=reason,
+        )
 
     @staticmethod
     def _recent_session_messages(
@@ -499,6 +648,34 @@ class OllamaService:
                 short_reason="Ситуация выглядит сложной или процессуально значимой.",
             )
 
+        if cls._is_general_reference_question(text):
+            return ConsultationAnalysis(
+                scenario=ConsultationSession.AnalysisScenario.TYPICAL_ANSWER,
+                category=category,
+                is_typical=True,
+                has_enough_information=True,
+                needs_clarification=False,
+                needs_specialist=False,
+                confidence=0.65,
+                missing_information=[],
+                clarifying_questions=[],
+                short_reason="Для общего справочного вопроса можно дать первичный ответ с оговорками.",
+            )
+
+        if session.awaiting_clarification and cls._has_substantial_new_details(text):
+            return ConsultationAnalysis(
+                scenario=ConsultationSession.AnalysisScenario.TYPICAL_ANSWER,
+                category=category,
+                is_typical=True,
+                has_enough_information=True,
+                needs_clarification=False,
+                needs_specialist=False,
+                confidence=0.68,
+                missing_information=[],
+                clarifying_questions=[],
+                short_reason="После уточнения уже можно дать первичный справочный ответ.",
+            )
+
         if len(text) < 60:
             return ConsultationAnalysis(
                 scenario=ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
@@ -637,6 +814,95 @@ class OllamaService:
     ) -> ConsultationAnalysis:
         analysis, _ = cls._analyze_user_message_with_trace(session, user_message)
         return analysis
+
+    @classmethod
+    def _adjust_analysis_for_context(
+        cls,
+        session: ConsultationSession,
+        user_message: ChatMessage,
+        analysis: ConsultationAnalysis,
+        *,
+        was_awaiting_clarification: bool,
+    ) -> ConsultationAnalysis:
+        if analysis.scenario in (
+            ConsultationSession.AnalysisScenario.NEEDS_SPECIALIST,
+            ConsultationSession.AnalysisScenario.OUT_OF_SCOPE,
+        ):
+            return analysis
+
+        user_history_text = cls._user_history_text(session)
+        previous_assistant_text = cls._recent_assistant_message_text(
+            session,
+            before_message_id=user_message.pk,
+        )
+        filtered_missing_information = [
+            item
+            for item in analysis.missing_information
+            if not cls._history_covers_item(item, user_history_text)
+        ][:MAX_CLARIFYING_QUESTIONS]
+        filtered_questions = [
+            question
+            for question in analysis.clarifying_questions
+            if not cls._history_covers_item(question, user_history_text)
+            and not (
+                was_awaiting_clarification
+                and cls._question_was_already_asked(question, previous_assistant_text)
+            )
+        ][:MAX_CLARIFYING_QUESTIONS]
+
+        should_prefer_general_answer = (
+            analysis.is_typical
+            and analysis.confidence >= GENERAL_ANSWER_CONFIDENCE_THRESHOLD
+            and cls._is_general_reference_question(user_message.content)
+            and len(filtered_missing_information) <= 1
+            and len(filtered_questions) <= 1
+        )
+        provided_substantial_update = (
+            was_awaiting_clarification and cls._has_substantial_new_details(user_message.content)
+        )
+        clarification_now_redundant = (
+            analysis.scenario == ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION
+            and not filtered_questions
+        )
+
+        if should_prefer_general_answer:
+            return cls._promote_to_typical_answer(
+                analysis,
+                "Вопрос допускает общий первичный справочный ответ с оговорками.",
+            )
+
+        if clarification_now_redundant:
+            return cls._promote_to_typical_answer(
+                analysis,
+                "Повторные уточнения не требуются, можно дать первичный ответ с оговорками.",
+            )
+
+        if (
+            analysis.scenario == ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION
+            and provided_substantial_update
+            and analysis.confidence >= GENERAL_ANSWER_CONFIDENCE_THRESHOLD
+            and len(filtered_questions) <= 1
+        ):
+            return cls._promote_to_typical_answer(
+                analysis,
+                "После содержательного уточнения уже можно дать первичный справочный ответ.",
+            )
+
+        if analysis.scenario != ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION:
+            return analysis
+
+        return ConsultationAnalysis(
+            scenario=ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
+            category=analysis.category,
+            is_typical=True,
+            has_enough_information=False,
+            needs_clarification=True,
+            needs_specialist=False,
+            confidence=analysis.confidence,
+            missing_information=filtered_missing_information,
+            clarifying_questions=filtered_questions,
+            short_reason=analysis.short_reason,
+        ).normalized()
 
     @classmethod
     def _category_label(cls, category_code: str) -> str:
@@ -834,6 +1100,22 @@ class OllamaService:
         analysis, analysis_llm_response = cls._analyze_user_message_with_trace(
             session,
             user_message,
+        )
+        analysis = cls._adjust_analysis_for_context(
+            session,
+            user_message,
+            analysis,
+            was_awaiting_clarification=was_awaiting_clarification,
+        )
+        cls._trace(
+            "analysis.final",
+            session_id=session.pk,
+            message_id=user_message.pk,
+            scenario=analysis.scenario,
+            category=analysis.category,
+            confidence=analysis.confidence,
+            questions=analysis.clarifying_questions,
+            missing_information=analysis.missing_information,
         )
         cls.apply_analysis_to_session(session, analysis)
         llm_response = cls.generate_response_for_analysis(
