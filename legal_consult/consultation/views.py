@@ -13,6 +13,7 @@ from .forms import (
     ConsultationCloseForm,
     ConsultationRequiresSpecialistForm,
     ConsultationStatusForm,
+    DashboardFilterForm,
 )
 from .models import ChatMessage, ConsultationCategory, ConsultationSession, LLMInteractionLog
 from .permissions import (
@@ -133,7 +134,30 @@ class AllSessionsView(PermissionRequiredMixin, ListView):
     context_object_name = "sessions"
 
     def get_queryset(self):
-        return ConsultationSession.objects.select_related("category", "assigned_to", "user")
+        queryset = ConsultationSession.objects.select_related("category", "assigned_to", "user")
+        self.filter_form = DashboardFilterForm(self.request.GET or None)
+        if self.filter_form.is_valid():
+            status = self.filter_form.cleaned_data.get("status")
+            category = self.filter_form.cleaned_data.get("category")
+            assigned_to = self.filter_form.cleaned_data.get("assigned_to")
+            if status:
+                queryset = queryset.filter(status=status)
+            if category:
+                queryset = queryset.filter(category=category)
+            if assigned_to:
+                queryset = queryset.filter(assigned_to=assigned_to)
+        return queryset
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["filter_form"] = getattr(self, "filter_form", DashboardFilterForm())
+        context["can_mark_needs_specialist"] = self.request.user.has_perm(
+            MARK_NEEDS_SPECIALIST_PERMISSION
+        )
+        context["can_close_consultation"] = self.request.user.has_perm(
+            CLOSE_CONSULTATION_PERMISSION
+        )
+        return context
 
 
 def _get_visible_session_for_action(request, pk: int) -> ConsultationSession:

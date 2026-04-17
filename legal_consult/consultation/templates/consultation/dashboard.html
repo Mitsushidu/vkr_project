@@ -6,6 +6,17 @@
 <section class="content-card">
     <h1>Панель сотрудника</h1>
     <p class="muted">Страница предназначена для сотрудников, имеющих право просматривать все обращения.</p>
+    <form method="get" class="dashboard-filters">
+        <div class="dashboard-filters-grid">
+            <div>{{ filter_form.status.label_tag }}{{ filter_form.status }}</div>
+            <div>{{ filter_form.category.label_tag }}{{ filter_form.category }}</div>
+            <div>{{ filter_form.assigned_to.label_tag }}{{ filter_form.assigned_to }}</div>
+        </div>
+        <div class="dashboard-filters-actions">
+            <button class="button secondary small" type="submit">Применить фильтры</button>
+            <a class="button secondary small" href="{% url 'consultation:dashboard' %}">Сбросить</a>
+        </div>
+    </form>
     <div class="table-wrapper">
         <table class="data-table">
             <thead>
@@ -15,6 +26,8 @@
                     <th>Категория</th>
                     <th>Статус</th>
                     <th>Назначенный специалист</th>
+                    <th>Требует специалиста</th>
+                    <th>Действия</th>
                 </tr>
             </thead>
             <tbody>
@@ -25,9 +38,30 @@
                         <td>{{ session.category|default:"—" }}</td>
                         <td>{{ session.get_status_display }}</td>
                         <td>{{ session.assigned_to|default:"—" }}</td>
+                        <td>{% if session.requires_specialist %}Да{% else %}Нет{% endif %}</td>
+                        <td>
+                            <div class="dashboard-actions">
+                                <a class="button secondary small" href="{% url 'consultation:session_detail' session.pk %}">Открыть</a>
+                                {% if can_mark_needs_specialist %}
+                                    <form method="post" action="{% url 'consultation:mark_consultation_requires_specialist' session.pk %}">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="requires_specialist" value="{% if session.requires_specialist %}false{% else %}true{% endif %}">
+                                        <button class="button secondary small" type="submit">
+                                            {% if session.requires_specialist %}Снять флаг{% else %}Требует специалиста{% endif %}
+                                        </button>
+                                    </form>
+                                {% endif %}
+                                {% if can_close_consultation and session.status == 'completed' %}
+                                    <form method="post" action="{% url 'consultation:close_consultation' session.pk %}">
+                                        {% csrf_token %}
+                                        <button class="button secondary small" type="submit">Закрыть</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+                        </td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="5">Данные отсутствуют.</td></tr>
+                    <tr><td colspan="7">Данные отсутствуют.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

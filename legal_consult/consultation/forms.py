@@ -109,3 +109,32 @@ class ConsultationCloseForm(forms.Form):
         if self.session.status == ConsultationSession.Status.CLOSED:
             raise ValidationError("Обращение уже закрыто.")
         return cleaned_data
+
+
+class DashboardFilterForm(forms.Form):
+    status = forms.ChoiceField(
+        label="Статус",
+        required=False,
+        choices=(("", "Все статусы"), *ConsultationSession.Status.choices),
+    )
+    category = forms.ModelChoiceField(
+        label="Категория",
+        required=False,
+        queryset=ConsultationCategory.objects.none(),
+        empty_label="Все категории",
+    )
+    assigned_to = forms.ModelChoiceField(
+        label="Исполнитель",
+        required=False,
+        queryset=User.objects.none(),
+        empty_label="Все исполнители",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["category"].queryset = ConsultationCategory.objects.order_by("name")
+        self.fields["assigned_to"].queryset = (
+            User.objects.filter(Q(groups__name__in=EMPLOYEE_ROLE_NAMES) | Q(is_superuser=True))
+            .distinct()
+            .order_by("username")
+        )

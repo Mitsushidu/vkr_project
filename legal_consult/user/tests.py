@@ -236,3 +236,38 @@ class InitSuperuserCommandTests(TestCase):
             call_command("init_superuser")
 
         self.assertEqual(get_user_model().objects.filter(is_superuser=True).count(), 1)
+
+
+class NavigationTests(TestCase):
+    def setUp(self):
+        call_command("init_roles")
+        self.user = get_user_model().objects.create_user(username="nav-user", password="pass12345")
+        self.head = get_user_model().objects.create_user(username="nav-head", password="pass12345")
+        self.staff_user = get_user_model().objects.create_user(
+            username="nav-staff",
+            password="pass12345",
+            is_staff=True,
+        )
+
+    def test_authenticated_user_sees_consultation_history_link(self):
+        self.client.login(username="nav-user", password="pass12345")
+
+        response = self.client.get(reverse("user:profile"))
+
+        self.assertContains(response, reverse("consultation:session_list"))
+        self.assertNotContains(response, reverse("consultation:dashboard"))
+
+    def test_employee_with_permission_sees_dashboard_link(self):
+        assign_primary_role(self.head, ROLE_HEAD)
+        self.client.login(username="nav-head", password="pass12345")
+
+        response = self.client.get(reverse("user:profile"))
+
+        self.assertContains(response, reverse("consultation:dashboard"))
+
+    def test_staff_user_sees_admin_link(self):
+        self.client.login(username="nav-staff", password="pass12345")
+
+        response = self.client.get(reverse("user:profile"))
+
+        self.assertContains(response, reverse("admin:index"))

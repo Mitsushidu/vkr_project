@@ -369,3 +369,46 @@ class ConsultationPermissionsTests(TestCase):
                 kwargs={"pk": self.available_session.pk},
             ),
         )
+
+    def test_dashboard_is_forbidden_for_regular_user(self):
+        self.client.login(username="owner", password="owner-pass")
+
+        response = self.client.get(reverse("consultation:dashboard"))
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_dashboard_filters_by_status(self):
+        assign_primary_role(self.supervisor, ROLE_HEAD)
+        self.available_session.status = ConsultationSession.Status.IN_PROGRESS
+        self.available_session.save(update_fields=["status", "updated_at"])
+        self.owner_session.status = ConsultationSession.Status.NEW
+        self.owner_session.save(update_fields=["status", "updated_at"])
+        self.client.login(username="supervisor", password="supervisor-pass")
+
+        response = self.client.get(
+            reverse("consultation:dashboard"),
+            {"status": ConsultationSession.Status.IN_PROGRESS},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        sessions = list(response.context["sessions"])
+        self.assertEqual(sessions, [self.available_session])
+
+    def test_dashboard_filters_by_category_and_assignee(self):
+        assign_primary_role(self.supervisor, ROLE_HEAD)
+        assign_primary_role(self.lawyer, ROLE_LAWYER)
+        other_category = ConsultationCategory.objects.create(
+            name="Административное право",
+            slug="admin-law",
+        )
+        self.assigned_session.category = other_category
+        self.assigned_session.save(update_fields=["category", "updated_at"])
+        self.client.login(username="supervisor", password="supervisor-pass")
+
+        response = self.client.get(
+            reverse("consultation:dashboard"),
+            {"category": other_category.pk, "assigned_to": self.lawyer.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(list(response.context["sessions"]), [self.assigned_session])
