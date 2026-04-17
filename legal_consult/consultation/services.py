@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -14,6 +15,9 @@ from .prompts import BASE_SYSTEM_PROMPT, PROMPTS
 
 AUTO_ESCALATION_CONFIDENCE_THRESHOLD = 0.85
 MAX_CLARIFYING_QUESTIONS = 3
+TRACE_PREVIEW_LENGTH = 400
+
+logger = logging.getLogger(__name__)
 
 CATEGORY_LOOKUPS = {
     ConsultationSession.AnalysisCategory.FAMILY: (
@@ -69,6 +73,14 @@ DEFAULT_CLARIFYING_QUESTIONS = [
     "На каком этапе находится вопрос сейчас: только возник спор, уже подано заявление или есть официальный ответ?",
     "Есть ли документы, даты, суммы или иные конкретные данные, которые могут повлиять на первичный вывод?",
 ]
+
+RESPONSE_PROMPT_KEYS = {
+    ConsultationSession.AnalysisScenario.TYPICAL_ANSWER: "typical_answer",
+    ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION: "clarification",
+    ConsultationSession.AnalysisScenario.NEEDS_SPECIALIST: "needs_specialist",
+    ConsultationSession.AnalysisScenario.OUT_OF_SCOPE: "out_of_scope",
+    ConsultationSession.AnalysisScenario.INSUFFICIENT_CONFIDENCE: "insufficient_confidence",
+}
 
 
 @dataclass
@@ -302,6 +314,18 @@ class ProcessedConsultationReply:
 
 class OllamaService:
     @staticmethod
+    def _preview_text(text: str, limit: int = TRACE_PREVIEW_LENGTH) -> str:
+        normalized = " ".join(str(text).split())
+        if len(normalized) <= limit:
+            return normalized
+        return f"{normalized[:limit]}..."
+
+    @classmethod
+    def _trace(cls, event: str, **payload: Any) -> None:
+        serialized_payload = json.dumps(payload, ensure_ascii=False, default=str)
+        logger.warning("consultation.llm.%s %s", event, serialized_payload)
+
+    @staticmethod
     def _recent_session_messages(
         session: ConsultationSession,
         exclude_message_ids: set[int] | None = None,
@@ -528,6 +552,15 @@ class OllamaService:
     ) -> tuple[ConsultationAnalysis, LLMResponse]:
         if not settings.OLLAMA_ENABLED:
             analysis = cls._demo_analysis(session, user_message)
+            cls._trace(
+                "analysis.demo",
+                session_id=session.pk,
+                message_id=user_message.pk,
+                scenario=analysis.scenario,
+                category=analysis.category,
+                confidence=analysis.confidence,
+                user_message=cls._preview_text(user_message.content),
+            )
             return analysis, LLMResponse(
                 text=cls._serialize_analysis(analysis),
                 status="demo",
@@ -542,7 +575,22 @@ class OllamaService:
             conversation_history=history,
             user_message=user_message.content,
         )
+        cls._trace(
+            "analysis.request",
+            session_id=session.pk,
+            message_id=user_message.pk,
+            user_message=cls._preview_text(user_message.content),
+        )
         response = cls._perform_ollama_chat(cls._build_single_prompt_messages(prompt))
+        cls._trace(
+            "analysis.response",
+            session_id=session.pk,
+            message_id=user_message.pk,
+            status=response.status,
+            model=response.model_name,
+            response_text=cls._preview_text(response.text),
+            error_text=response.error_text,
+        )
         if response.status != "success":
             return ConsultationAnalysis.fallback(
                 "Анализ обращения не выполнен из-за ошибки обращения к Ollama."
@@ -551,6 +599,13 @@ class OllamaService:
         try:
             analysis = ConsultationAnalysis.from_response_text(response.text)
         except ValueError as exc:
+            cls._trace(
+                "analysis.invalid_json",
+                session_id=session.pk,
+                message_id=user_message.pk,
+                error=str(exc),
+                response_text=cls._preview_text(response.text),
+            )
             return ConsultationAnalysis.fallback(
                 "Ответ анализатора не удалось корректно распознать, поэтому требуется уточнение."
             ), LLMResponse(
@@ -562,6 +617,16 @@ class OllamaService:
                 completion_tokens=response.completion_tokens,
                 error_text=str(exc),
             )
+        cls._trace(
+            "analysis.normalized",
+            session_id=session.pk,
+            message_id=user_message.pk,
+            scenario=analysis.scenario,
+            category=analysis.category,
+            confidence=analysis.confidence,
+            needs_clarification=analysis.needs_clarification,
+            needs_specialist=analysis.needs_specialist,
+        )
         return analysis, response
 
     @classmethod
@@ -713,13 +778,25 @@ class OllamaService:
         history = cls._format_conversation_history(
             cls._recent_session_messages(session, exclude_message_ids={user_message.pk})
         )
-        prompt_key = analysis.scenario
+        prompt_key = RESPONSE_PROMPT_KEYS.get(
+            analysis.scenario,
+            "clarification",
+        )
         if (
             analysis.scenario == ConsultationSession.AnalysisScenario.TYPICAL_ANSWER
             and after_clarification
         ):
             prompt_key = "after_clarification"
 
+        cls._trace(
+            "generation.request",
+            session_id=session.pk,
+            message_id=user_message.pk,
+            scenario=analysis.scenario,
+            prompt_key=prompt_key,
+            category=analysis.category,
+            after_clarification=after_clarification,
+        )
         prompt = cls._render_prompt(
             PROMPTS[prompt_key],
             category=cls._category_label(analysis.category),
@@ -733,7 +810,19 @@ class OllamaService:
             user_message=user_message.content,
             clarification_answers=user_message.content,
         )
-        return cls._perform_ollama_chat(cls._build_single_prompt_messages(prompt))
+        response = cls._perform_ollama_chat(cls._build_single_prompt_messages(prompt))
+        cls._trace(
+            "generation.response",
+            session_id=session.pk,
+            message_id=user_message.pk,
+            scenario=analysis.scenario,
+            prompt_key=prompt_key,
+            status=response.status,
+            model=response.model_name,
+            response_text=cls._preview_text(response.text),
+            error_text=response.error_text,
+        )
+        return response
 
     @classmethod
     def process_user_message(

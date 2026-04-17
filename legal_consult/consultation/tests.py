@@ -599,6 +599,38 @@ class ConsultationRoutingTests(TestCase):
         self.assertEqual(self.session.status, ConsultationSession.Status.IN_PROGRESS)
         self.assertIn("нужно уточнить", processed.llm_response.text.lower())
 
+    def test_generate_response_maps_clarification_scenario_to_existing_prompt_key(self):
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Меня уволили, что делать?",
+        )
+        analysis = self._analysis(
+            scenario=ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
+            category=ConsultationSession.AnalysisCategory.LABOR,
+            has_enough_information=False,
+            needs_clarification=True,
+            confidence=0.51,
+        )
+
+        with self.settings(OLLAMA_ENABLED=True), patch.object(
+            OllamaService,
+            "_perform_ollama_chat",
+            return_value=LLMResponse(
+                text="Для первичной консультации нужно уточнить несколько обстоятельств.",
+                status="success",
+                model_name="demo-model",
+            ),
+        ) as mocked:
+            response = OllamaService.generate_response_for_analysis(
+                self.session,
+                analysis,
+                user_message,
+            )
+
+        self.assertEqual(response.status, "success")
+        mocked.assert_called_once()
+
     def test_complex_case_escalates_only_in_extreme_scenario(self):
         user_message = ChatMessage.objects.create(
             session=self.session,
