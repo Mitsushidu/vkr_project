@@ -36,8 +36,10 @@ SCENARIO_ANALYZER_PROMPT = dedent("""
 {
   "scenario": "typical_answer | needs_clarification | needs_specialist | out_of_scope | insufficient_confidence",
   "category": "family | labor | housing | consumer | inheritance | administrative | civil | other",
+  "is_typical": true,
+  "has_enough_information": false,
   "needs_specialist": true,
-  "needs_clarification": false,
+  "needs_clarification": true,
   "confidence": 0.0,
   "missing_information": ["..."],
   "clarifying_questions": ["..."],
@@ -51,8 +53,10 @@ SCENARIO_ANALYZER_PROMPT = dedent("""
 4. scenario = "out_of_scope", если запрос не относится к юридической помощи.
 5. scenario = "insufficient_confidence", если ты не можешь безопасно определить корректный сценарий.
 6. confidence укажи числом от 0 до 1.
-7. clarifying_questions заполняй только если нужен сценарий needs_clarification.
-8. Не выдумывай нормы права и не формируй юридическую консультацию на этом этапе.
+7. is_typical = true, если вопрос относится к типовым первичным юридическим ситуациям.
+8. has_enough_information = true, если уже можно дать первичный справочный ответ без критичных допущений.
+9. clarifying_questions заполняй только если нужен сценарий needs_clarification.
+10. Не выдумывай нормы права и не формируй юридическую консультацию на этом этапе.
 
 История диалога:
 {{conversation_history}}

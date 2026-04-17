@@ -27,6 +27,23 @@ class ConsultationSession(models.Model):
         COMPLETED = "completed", "Завершено"
         CLOSED = "closed", "Закрыто"
 
+    class AnalysisScenario(models.TextChoices):
+        TYPICAL_ANSWER = "typical_answer", "Типовой ответ"
+        NEEDS_CLARIFICATION = "needs_clarification", "Требуется уточнение"
+        NEEDS_SPECIALIST = "needs_specialist", "Передача специалисту"
+        OUT_OF_SCOPE = "out_of_scope", "Вне рамок консультации"
+        INSUFFICIENT_CONFIDENCE = "insufficient_confidence", "Недостаточная уверенность"
+
+    class AnalysisCategory(models.TextChoices):
+        FAMILY = "family", "Семейное право"
+        LABOR = "labor", "Трудовое право"
+        HOUSING = "housing", "Жилищное право"
+        CONSUMER = "consumer", "Защита прав потребителей"
+        INHERITANCE = "inheritance", "Наследственное право"
+        ADMINISTRATIVE = "administrative", "Административные вопросы"
+        CIVIL = "civil", "Гражданские вопросы"
+        OTHER = "other", "Иное"
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -57,6 +74,19 @@ class ConsultationSession(models.Model):
         default=Status.NEW,
     )
     requires_specialist = models.BooleanField("Требуется специалист", default=False)
+    last_analysis_scenario = models.CharField(
+        "Последний сценарий анализа",
+        max_length=32,
+        choices=AnalysisScenario.choices,
+        blank=True,
+    )
+    last_analysis_category = models.CharField(
+        "Последняя определённая категория",
+        max_length=32,
+        choices=AnalysisCategory.choices,
+        blank=True,
+    )
+    awaiting_clarification = models.BooleanField("Ожидается уточнение", default=False)
     created_at = models.DateTimeField("Создано", auto_now_add=True)
     updated_at = models.DateTimeField("Обновлено", auto_now=True)
 

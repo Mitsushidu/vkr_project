@@ -1,11 +1,13 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 
-from .models import ChatMessage, ConsultationCategory, ConsultationSession
-from .services import OllamaService
+from .models import ChatMessage, ConsultationCategory, ConsultationSession, LLMInteractionLog
+from .services import ConsultationAnalysis, LLMResponse, OllamaService, ProcessedConsultationReply
 from user.roles import ROLE_HEAD, ROLE_LAWYER, ROLE_SUPPORT, assign_primary_role
 
 
@@ -412,3 +414,371 @@ class ConsultationPermissionsTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(list(response.context["sessions"]), [self.assigned_session])
+
+
+class ConsultationRoutingTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="client", password="client-pass")
+        self.category = ConsultationCategory.objects.create(
+            name="Семейное право",
+            slug="family-law",
+        )
+        self.session = ConsultationSession.objects.create(user=self.user, title="Маршрутизация")
+
+    def _analysis(self, **overrides):
+        payload = {
+            "scenario": ConsultationSession.AnalysisScenario.TYPICAL_ANSWER,
+            "category": ConsultationSession.AnalysisCategory.FAMILY,
+            "is_typical": True,
+            "has_enough_information": True,
+            "needs_clarification": False,
+            "needs_specialist": False,
+            "confidence": 0.82,
+            "missing_information": [],
+            "clarifying_questions": [],
+            "short_reason": "Типовой семейный вопрос.",
+        }
+        payload.update(overrides)
+        return ConsultationAnalysis.from_payload(payload)
+
+    def test_analysis_is_triggered_after_new_user_message(self):
+        self.client.login(username="client", password="client-pass")
+        processed = ProcessedConsultationReply(
+            analysis=self._analysis(),
+            llm_response=LLMResponse(
+                text="Краткий вывод:\nТестовый ответ.",
+                status="success",
+                model_name="demo-model",
+            ),
+            analysis_llm_response=LLMResponse(
+                text='{"scenario":"typical_answer"}',
+                status="success",
+                model_name="demo-model",
+            ),
+        )
+
+        with patch("consultation.views.OllamaService.process_user_message", return_value=processed) as mocked:
+            response = self.client.post(
+                reverse("consultation:send_message_api", kwargs={"pk": self.session.pk}),
+                {"content": "Помогите понять мои права после развода."},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        mocked.assert_called_once()
+        self.assertEqual(self.session.messages.filter(role=ChatMessage.Role.USER).count(), 1)
+        self.assertEqual(self.session.messages.filter(role=ChatMessage.Role.ASSISTANT).count(), 1)
+
+    def test_send_message_logs_analysis_and_generation_separately(self):
+        self.client.login(username="client", password="client-pass")
+        processed = ProcessedConsultationReply(
+            analysis=self._analysis(),
+            llm_response=LLMResponse(
+                text="Краткий вывод:\nТестовый ответ.",
+                status="success",
+                model_name="demo-model",
+            ),
+            analysis_llm_response=LLMResponse(
+                text='{"scenario":"typical_answer"}',
+                status="success",
+                model_name="demo-model",
+            ),
+        )
+
+        with patch("consultation.views.OllamaService.process_user_message", return_value=processed):
+            response = self.client.post(
+                reverse("consultation:send_message_api", kwargs={"pk": self.session.pk}),
+                {"content": "Помогите понять мои права после развода."},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(LLMInteractionLog.objects.count(), 2)
+        analysis_log, generation_log = LLMInteractionLog.objects.order_by("created_at", "pk")
+        self.assertIsNone(analysis_log.response_message)
+        self.assertEqual(analysis_log.request_message.role, ChatMessage.Role.USER)
+        self.assertIsNotNone(generation_log.response_message)
+        self.assertEqual(generation_log.response_message.role, ChatMessage.Role.ASSISTANT)
+
+    def test_typical_question_with_enough_data_gives_structured_answer(self):
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="После развода у нас есть спор о порядке общения с ребенком и уже есть письменные договоренности.",
+        )
+        analysis = self._analysis()
+        response = LLMResponse(
+            text=(
+                "Краткий вывод:\nМожно дать первичный справочный ответ.\n\n"
+                "Что важно учесть:\n- Нужны точные обстоятельства.\n\n"
+                "Рекомендуемые действия:\n1. Соберите документы.\n\n"
+                "Что желательно уточнить дополнительно:\nДополнительные уточнения на текущем этапе не требуются.\n\n"
+                "Ограничение консультации:\n"
+                "Данный ответ носит справочный характер и не заменяет полноценную юридическую консультацию специалиста."
+            ),
+            status="success",
+            model_name="demo-model",
+        )
+
+        with patch.object(
+            OllamaService,
+            "_analyze_user_message_with_trace",
+            return_value=(
+                analysis,
+                LLMResponse(
+                    text='{"scenario":"typical_answer"}',
+                    status="success",
+                    model_name="demo-model",
+                ),
+            ),
+        ), patch.object(
+            OllamaService,
+            "generate_response_for_analysis",
+            return_value=response,
+        ):
+            processed = OllamaService.process_user_message(self.session, user_message)
+
+        self.session.refresh_from_db()
+        self.assertEqual(processed.analysis.scenario, ConsultationSession.AnalysisScenario.TYPICAL_ANSWER)
+        self.assertIn("Краткий вывод:", processed.llm_response.text)
+        self.assertIn("Что важно учесть:", processed.llm_response.text)
+        self.assertIn("Рекомендуемые действия:", processed.llm_response.text)
+        self.assertFalse(self.session.awaiting_clarification)
+        self.assertEqual(self.session.last_analysis_scenario, ConsultationSession.AnalysisScenario.TYPICAL_ANSWER)
+
+    def test_typical_question_with_missing_data_gives_clarification(self):
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Меня уволили, что делать?",
+        )
+        analysis = self._analysis(
+            scenario=ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION,
+            category=ConsultationSession.AnalysisCategory.LABOR,
+            has_enough_information=False,
+            needs_clarification=True,
+            confidence=0.48,
+            missing_information=["Дата увольнения", "Какое основание указал работодатель"],
+            clarifying_questions=[
+                "Когда именно произошло увольнение?",
+                "Какое основание увольнения указал работодатель в документах?",
+            ],
+            short_reason="Не хватает ключевых фактов по увольнению.",
+        )
+        response = LLMResponse(
+            text=(
+                "Для первичной консультации нужно уточнить несколько обстоятельств.\n\n"
+                "1. Когда именно произошло увольнение?\n"
+                "2. Какое основание увольнения указал работодатель в документах?\n\n"
+                "После уточнения можно будет дать более точный справочный ответ."
+            ),
+            status="success",
+            model_name="demo-model",
+        )
+
+        with patch.object(
+            OllamaService,
+            "_analyze_user_message_with_trace",
+            return_value=(
+                analysis,
+                LLMResponse(
+                    text='{"scenario":"needs_clarification"}',
+                    status="success",
+                    model_name="demo-model",
+                ),
+            ),
+        ), patch.object(
+            OllamaService,
+            "generate_response_for_analysis",
+            return_value=response,
+        ):
+            processed = OllamaService.process_user_message(self.session, user_message)
+
+        self.session.refresh_from_db()
+        self.assertEqual(processed.analysis.scenario, ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION)
+        self.assertTrue(self.session.awaiting_clarification)
+        self.assertFalse(self.session.requires_specialist)
+        self.assertEqual(self.session.status, ConsultationSession.Status.IN_PROGRESS)
+        self.assertIn("нужно уточнить", processed.llm_response.text.lower())
+
+    def test_complex_case_escalates_only_in_extreme_scenario(self):
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Получил судебное определение и нужно срочно обжаловать действия по делу.",
+        )
+        analysis = self._analysis(
+            scenario=ConsultationSession.AnalysisScenario.NEEDS_SPECIALIST,
+            is_typical=False,
+            has_enough_information=False,
+            needs_specialist=True,
+            confidence=0.93,
+            short_reason="Есть признаки процессуально сложного случая.",
+        )
+
+        with patch.object(
+            OllamaService,
+            "_analyze_user_message_with_trace",
+            return_value=(
+                analysis,
+                LLMResponse(
+                    text='{"scenario":"needs_specialist"}',
+                    status="success",
+                    model_name="demo-model",
+                ),
+            ),
+        ), patch.object(
+            OllamaService,
+            "generate_response_for_analysis",
+            return_value=LLMResponse(
+                text="Ситуация требует участия специалиста.",
+                status="success",
+                model_name="demo-model",
+            ),
+        ):
+            OllamaService.process_user_message(self.session, user_message)
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, ConsultationSession.Status.NEEDS_SPECIALIST)
+        self.assertTrue(self.session.requires_specialist)
+        self.assertFalse(self.session.awaiting_clarification)
+
+    def test_low_confidence_specialist_scenario_is_downgraded_to_clarification(self):
+        analysis = ConsultationAnalysis.from_payload(
+            {
+                "scenario": ConsultationSession.AnalysisScenario.NEEDS_SPECIALIST,
+                "category": ConsultationSession.AnalysisCategory.CIVIL,
+                "is_typical": False,
+                "has_enough_information": False,
+                "needs_specialist": True,
+                "needs_clarification": False,
+                "confidence": 0.32,
+                "missing_information": ["Недостаточно данных о стадии спора"],
+                "clarifying_questions": [],
+                "short_reason": "Есть риск, но уверенность анализа низкая.",
+            }
+        )
+
+        self.assertEqual(analysis.scenario, ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION)
+        self.assertTrue(analysis.needs_clarification)
+        self.assertFalse(analysis.needs_specialist)
+
+    def test_category_is_saved_when_match_exists(self):
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="После развода есть спор о выплате алиментов.",
+        )
+        analysis = self._analysis(category=ConsultationSession.AnalysisCategory.FAMILY)
+
+        with patch.object(
+            OllamaService,
+            "_analyze_user_message_with_trace",
+            return_value=(
+                analysis,
+                LLMResponse(
+                    text='{"scenario":"typical_answer"}',
+                    status="success",
+                    model_name="demo-model",
+                ),
+            ),
+        ), patch.object(
+            OllamaService,
+            "generate_response_for_analysis",
+            return_value=LLMResponse(
+                text="Краткий вывод:\nТест.",
+                status="success",
+                model_name="demo-model",
+            ),
+        ):
+            OllamaService.process_user_message(self.session, user_message)
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.last_analysis_category, ConsultationSession.AnalysisCategory.FAMILY)
+        self.assertEqual(self.session.category, self.category)
+
+    def test_analysis_json_is_validated(self):
+        with self.assertRaises(ValueError):
+            ConsultationAnalysis.from_response_text("```json\n{\"scenario\":\"unknown\"}\n```")
+
+    def test_invalid_analysis_response_is_handled_safely(self):
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Подскажите по разделу имущества.",
+        )
+
+        with self.settings(OLLAMA_ENABLED=True), patch.object(
+            OllamaService,
+            "_perform_ollama_chat",
+            return_value=LLMResponse(
+                text="невалидный ответ",
+                status="success",
+                model_name="demo-model",
+            ),
+        ):
+            analysis = OllamaService.analyze_user_message(self.session, user_message)
+
+        self.assertEqual(analysis.scenario, ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION)
+        self.assertFalse(analysis.needs_specialist)
+        self.assertGreater(len(analysis.clarifying_questions), 0)
+
+    def test_low_confidence_prefers_clarification_over_escalation(self):
+        analysis = ConsultationAnalysis.from_payload(
+            {
+                "scenario": ConsultationSession.AnalysisScenario.INSUFFICIENT_CONFIDENCE,
+                "category": ConsultationSession.AnalysisCategory.CIVIL,
+                "is_typical": False,
+                "has_enough_information": False,
+                "needs_specialist": False,
+                "needs_clarification": False,
+                "confidence": 0.24,
+                "missing_information": ["Неясна стадия спора"],
+                "clarifying_questions": [],
+                "short_reason": "Низкая уверенность без признаков крайнего случая.",
+            }
+        )
+
+        self.assertEqual(analysis.scenario, ConsultationSession.AnalysisScenario.NEEDS_CLARIFICATION)
+        self.assertTrue(analysis.needs_clarification)
+        self.assertFalse(analysis.needs_specialist)
+
+    def test_manual_specialist_mode_is_not_reset_by_auto_analysis(self):
+        self.session.status = ConsultationSession.Status.NEEDS_SPECIALIST
+        self.session.requires_specialist = True
+        self.session.save(update_fields=["status", "requires_specialist", "updated_at"])
+        user_message = ChatMessage.objects.create(
+            session=self.session,
+            role=ChatMessage.Role.USER,
+            content="Дополнительно сообщаю новые обстоятельства по делу.",
+        )
+        analysis = self._analysis(
+            scenario=ConsultationSession.AnalysisScenario.TYPICAL_ANSWER,
+            confidence=0.91,
+            short_reason="По одному сообщению вопрос выглядит более простым.",
+        )
+
+        with patch.object(
+            OllamaService,
+            "_analyze_user_message_with_trace",
+            return_value=(
+                analysis,
+                LLMResponse(
+                    text='{"scenario":"typical_answer"}',
+                    status="success",
+                    model_name="demo-model",
+                ),
+            ),
+        ), patch.object(
+            OllamaService,
+            "generate_response_for_analysis",
+            return_value=LLMResponse(
+                text="Краткий вывод:\nТест.",
+                status="success",
+                model_name="demo-model",
+            ),
+        ):
+            OllamaService.process_user_message(self.session, user_message)
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.status, ConsultationSession.Status.NEEDS_SPECIALIST)
+        self.assertTrue(self.session.requires_specialist)
+        self.assertFalse(self.session.awaiting_clarification)

@@ -271,17 +271,29 @@ def send_message_api(request, pk: int):
         content=content,
     )
     session.update_title_from_message(content)
-    if session.status == ConsultationSession.Status.NEW:
-        session.status = ConsultationSession.Status.IN_PROGRESS
-        session.save(update_fields=["status", "updated_at"])
-
-    llm_response = OllamaService.generate_reply(session)
+    processed_reply = OllamaService.process_user_message(session, user_message)
+    llm_response = processed_reply.llm_response
+    session.refresh_from_db(fields=["title", "status"])
     assistant_message = ChatMessage.objects.create(
         session=session,
         role=ChatMessage.Role.ASSISTANT,
         content=llm_response.text,
         is_error=llm_response.status == "error",
     )
+
+    analysis_llm_response = processed_reply.analysis_llm_response
+    if analysis_llm_response is not None:
+        LLMInteractionLog.objects.create(
+            session=session,
+            request_message=user_message,
+            response_message=None,
+            model_name=analysis_llm_response.model_name,
+            status=analysis_llm_response.status,
+            total_duration_ms=analysis_llm_response.total_duration_ms,
+            prompt_tokens=analysis_llm_response.prompt_tokens,
+            completion_tokens=analysis_llm_response.completion_tokens,
+            error_text=analysis_llm_response.error_text,
+        )
 
     LLMInteractionLog.objects.create(
         session=session,
