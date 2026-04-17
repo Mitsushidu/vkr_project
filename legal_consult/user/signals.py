@@ -16,5 +16,6 @@ def create_user_profile(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=User)
 def save_user_profile(sender, instance, **kwargs):
-    if hasattr(instance, "profile"):
-        instance.profile.save()
+    profile = UserProfile.objects.filter(user=instance).select_related("primary_role").first()
+    if profile:
+        profile.save()

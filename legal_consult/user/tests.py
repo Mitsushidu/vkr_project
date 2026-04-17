@@ -1,3 +1,7 @@
+import os
+from io import StringIO
+from unittest.mock import patch
+
 from django.contrib.auth.models import Group, Permission
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -28,6 +32,45 @@ class UserProfileTests(TestCase):
                 codename="can_manage_users",
             ).exists()
         )
+
+
+class RegistrationTests(TestCase):
+    def test_registration_creates_regular_user_with_default_role(self):
+        response = self.client.post(
+            reverse("register"),
+            {
+                "username": "new-user",
+                "email": "new-user@example.com",
+                "password1": "StrongPass123",
+                "password2": "StrongPass123",
+            },
+            follow=True,
+        )
+
+        user = get_user_model().objects.get(username="new-user")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(user.groups.filter(name="Пользователь").exists())
+        self.assertEqual(user.profile.primary_role.name, "Пользователь")
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertTrue(response.wsgi_request.user.is_authenticated)
+
+    def test_registration_does_not_create_staff_or_superuser(self):
+        self.client.post(
+            reverse("register"),
+            {
+                "username": "plain-user",
+                "email": "plain@example.com",
+                "password1": "StrongPass123",
+                "password2": "StrongPass123",
+            },
+        )
+
+        user = get_user_model().objects.get(username="plain-user")
+
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
 
 
 class InitRolesCommandTests(TestCase):
@@ -157,3 +200,39 @@ class ProfileViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["primary_role"].name, ROLE_ADMIN)
         self.assertContains(response, ROLE_ADMIN)
+
+
+class InitSuperuserCommandTests(TestCase):
+    def test_init_superuser_creates_superuser_when_missing(self):
+        out = StringIO()
+        with patch.dict(
+            os.environ,
+            {
+                "INIT_SUPERUSER_USERNAME": "demo-admin",
+                "INIT_SUPERUSER_EMAIL": "demo-admin@example.com",
+                "INIT_SUPERUSER_PASSWORD": "DemoPass123",
+            },
+            clear=False,
+        ):
+            call_command("init_superuser", stdout=out)
+
+        user = get_user_model().objects.get(username="demo-admin")
+
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
+        self.assertEqual(get_user_model().objects.filter(is_superuser=True).count(), 1)
+
+    def test_init_superuser_is_idempotent(self):
+        with patch.dict(
+            os.environ,
+            {
+                "INIT_SUPERUSER_USERNAME": "demo-admin",
+                "INIT_SUPERUSER_EMAIL": "demo-admin@example.com",
+                "INIT_SUPERUSER_PASSWORD": "DemoPass123",
+            },
+            clear=False,
+        ):
+            call_command("init_superuser")
+            call_command("init_superuser")
+
+        self.assertEqual(get_user_model().objects.filter(is_superuser=True).count(), 1)
