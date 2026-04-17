@@ -16,6 +16,9 @@ class UserProfile(models.Model):
     class Meta:
         verbose_name = "Профиль пользователя"
         verbose_name_plural = "Профили пользователей"
+        permissions = [
+            ("can_manage_users", "Может управлять пользователями"),
+        ]
 
     def __str__(self) -> str:
         return f"Профиль: {self.user.username}"

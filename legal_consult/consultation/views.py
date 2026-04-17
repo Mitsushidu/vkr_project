@@ -1,13 +1,17 @@
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, PermissionRequiredMixin
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404, redirect
+from django.shortcuts import get_object_or_404
 from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import DetailView, ListView, RedirectView
 
 from .forms import ChatMessageForm
 from .models import ChatMessage, ConsultationCategory, ConsultationSession, LLMInteractionLog
+from .permissions import (
+    VIEW_ALL_CONSULTATIONS_PERMISSION,
+    get_visible_consultations_queryset,
+)
 from .services import OllamaService
 
 
@@ -16,9 +20,8 @@ class ConsultationIndexView(LoginRequiredMixin, ListView):
     context_object_name = "sessions"
 
     def get_queryset(self):
-        return ConsultationSession.objects.filter(user=self.request.user).select_related(
-            "category", "assigned_to"
-        )
+        queryset = ConsultationSession.objects.select_related("category", "assigned_to", "user")
+        return get_visible_consultations_queryset(self.request.user, queryset)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -47,18 +50,14 @@ class SessionDetailView(LoginRequiredMixin, DetailView):
         queryset = ConsultationSession.objects.select_related(
             "category", "assigned_to", "user"
         ).prefetch_related("messages")
-        if self.request.user.has_perm("consultation.can_review_consultations"):
-            return queryset
-        return queryset.filter(user=self.request.user)
+        return get_visible_consultations_queryset(self.request.user, queryset)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        if self.request.user.has_perm("consultation.can_review_consultations"):
-            sessions = ConsultationSession.objects.select_related("category", "assigned_to", "user")
-        else:
-            sessions = ConsultationSession.objects.filter(user=self.request.user).select_related(
-                "category", "assigned_to"
-            )
+        sessions = get_visible_consultations_queryset(
+            self.request.user,
+            ConsultationSession.objects.select_related("category", "assigned_to", "user"),
+        )
         context["sessions"] = sessions
         context["message_form"] = ChatMessageForm()
         context["categories"] = ConsultationCategory.objects.filter(is_active=True)
@@ -71,13 +70,11 @@ class SessionListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         queryset = ConsultationSession.objects.select_related("category", "assigned_to", "user")
-        if self.request.user.has_perm("consultation.can_review_consultations"):
-            return queryset
-        return queryset.filter(user=self.request.user)
+        return get_visible_consultations_queryset(self.request.user, queryset)
 
 
 class AllSessionsView(PermissionRequiredMixin, ListView):
-    permission_required = "consultation.can_review_consultations"
+    permission_required = VIEW_ALL_CONSULTATIONS_PERMISSION
     template_name = "consultation/dashboard.html"
     context_object_name = "sessions"
 
@@ -91,10 +88,10 @@ def send_message_api(request, pk: int):
         return JsonResponse({"detail": "Требуется авторизация."}, status=401)
 
     session_queryset = ConsultationSession.objects.select_related("user")
-    if not request.user.has_perm("consultation.can_review_consultations"):
-        session_queryset = session_queryset.filter(user=request.user)
-
-    session = get_object_or_404(session_queryset, pk=pk)
+    session = get_object_or_404(
+        get_visible_consultations_queryset(request.user, session_queryset),
+        pk=pk,
+    )
     form = ChatMessageForm(request.POST)
     if not form.is_valid():
         return JsonResponse({"errors": form.errors}, status=400)

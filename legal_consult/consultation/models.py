@@ -65,8 +65,12 @@ class ConsultationSession(models.Model):
         verbose_name_plural = "Сеансы консультаций"
         ordering = ("-updated_at",)
         permissions = [
-            ("can_route_consultations", "Может маршрутизировать обращения"),
-            ("can_review_consultations", "Может просматривать все обращения"),
+            ("can_view_all_consultations", "Может просматривать все обращения"),
+            ("can_assign_consultation", "Может назначать обращения исполнителю"),
+            ("can_change_consultation_status", "Может изменять статус обращения"),
+            ("can_mark_needs_specialist", "Может помечать обращение как требующее специалиста"),
+            ("can_close_consultation", "Может закрывать обращения"),
+            ("can_review_llm_logs", "Может просматривать журналы взаимодействий с LLM"),
         ]
 
     def __str__(self) -> str:
