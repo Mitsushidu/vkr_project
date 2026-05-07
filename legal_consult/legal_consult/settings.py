@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     "django.contrib.humanize",
     "core",
     "consultation",
+    "knowledge",
     "user",
 ]
 

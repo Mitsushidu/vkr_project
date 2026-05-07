@@ -8,4 +8,8 @@ dependencies = [
     "django>=6.0.4",
     "python-dotenv>=1.0.1",
     "psycopg2>=2.9.11",
+    "datasets>=4.8.5",
+    "pandas>=3.0.2",
+    "pyarrow>=24.0.0",
+    "tqdm>=4.67.3",
 ]
