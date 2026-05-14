@@ -212,6 +212,17 @@
     background: #fff5f5;
 }
 
+.chat-bubble.loading,
+.chat-bubble.typing {
+    opacity: 0.78;
+}
+
+.chat-bubble.loading .chat-text,
+.chat-bubble.typing .chat-text {
+    color: var(--muted);
+    font-style: italic;
+}
+
 .chat-role {
     font-size: 0.85rem;
     font-weight: 700;

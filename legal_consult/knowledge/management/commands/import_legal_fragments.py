@@ -97,7 +97,19 @@ class Command(BaseCommand):
         parser.add_argument("--csv", dest="csv_path", help="Путь к CSV-файлу с фрагментами")
         parser.add_argument("--hf", action="store_true", help="Импортировать RusLawOD из Hugging Face")
         parser.add_argument("--limit", type=int, default=100, help="Максимум документов/фрагментов для HF")
-        parser.add_argument("--keyword", default="", help="Фильтр по слову в названии или тексте для HF")
+        parser.add_argument(
+            "--keyword",
+            default="",
+            help=(
+                "Фильтр по слову в названии или тексте для HF. "
+                'Пример: python manage.py import_legal_fragments --hf --limit 100 --keyword "Статья 228"'
+            ),
+        )
+        parser.add_argument(
+            "--replace",
+            action="store_true",
+            help="Заменять фрагменты уже импортированных документов",
+        )
 
     def handle(self, *args, **options):
         csv_path = options.get("csv_path")
@@ -107,22 +119,31 @@ class Command(BaseCommand):
             raise CommandError("Укажите ровно один режим: --csv path или --hf")
 
         if csv_path:
-            documents_created, fragments_created = self.import_csv(csv_path)
+            self.stdout.write(f"Режим импорта: CSV")
+            self.stdout.write(f"Файл: {csv_path}")
+            self.stdout.write(f"Keyword: не используется; limit: без ограничения")
+            stats = self.import_csv(csv_path, replace=options["replace"])
         else:
-            documents_created, fragments_created = self.import_hf(
+            self.stdout.write(f"Режим импорта: Hugging Face")
+            self.stdout.write(f"Keyword: {options['keyword'] or 'не задан'}; limit: {options['limit']}")
+            stats = self.import_hf(
                 limit=options["limit"],
                 keyword=options["keyword"],
+                replace=options["replace"],
             )
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Создано документов: {documents_created}; фрагментов: {fragments_created}"
+                "Импорт завершён:\n"
+                f"создано документов: {stats['documents_created']}\n"
+                f"пропущено дублей: {stats['duplicates_skipped']}\n"
+                f"создано фрагментов: {stats['fragments_created']}\n"
+                f"пропущено пустых документов: {stats['empty_skipped']}"
             )
         )
 
-    def import_csv(self, csv_path):
-        documents_created = 0
-        fragments_created = 0
+    def import_csv(self, csv_path, replace=False):
+        stats = self.empty_stats()
 
         try:
             csv_file = open(csv_path, newline="", encoding="utf-8-sig")
@@ -132,7 +153,7 @@ class Command(BaseCommand):
         with csv_file:
             reader = csv.DictReader(csv_file)
             for row in reader:
-                document, fragment_count = self.create_document_with_fragments(
+                _, fragment_count, result = self.create_document_with_fragments(
                     title=self.get_value(row, "title") or "Без названия",
                     document_type=self.get_value(row, "document_type"),
                     source_uid=self.get_value(row, "source_uid"),
@@ -142,13 +163,13 @@ class Command(BaseCommand):
                     article_number=self.get_value(row, "article_number"),
                     heading=self.get_value(row, "heading"),
                     source_name="CSV",
+                    replace=replace,
                 )
-                documents_created += 1 if document else 0
-                fragments_created += fragment_count
+                self.update_stats(stats, result, fragment_count)
 
-        return documents_created, fragments_created
+        return stats
 
-    def import_hf(self, limit, keyword):
+    def import_hf(self, limit, keyword, replace=False):
         try:
             from datasets import load_dataset
         except ImportError as exc:
@@ -161,11 +182,11 @@ class Command(BaseCommand):
 
         dataset = load_dataset("irlspbru/RusLawOD", split="train", streaming=True)
         keyword = (keyword or "").lower()
-        documents_created = 0
-        fragments_created = 0
+        stats = self.empty_stats()
+        imported_documents = 0
 
         for row in dataset:
-            if documents_created >= limit or fragments_created >= limit:
+            if imported_documents >= limit or stats["fragments_created"] >= limit:
                 break
 
             title = self.get_value(row, "headingIPS") or "Без названия"
@@ -173,8 +194,8 @@ class Command(BaseCommand):
             if keyword and keyword not in f"{title}\n{text}".lower():
                 continue
 
-            remaining_fragments = limit - fragments_created
-            document, fragment_count = self.create_document_with_fragments(
+            remaining_fragments = limit - stats["fragments_created"]
+            _, fragment_count, result = self.create_document_with_fragments(
                 title=title,
                 document_type=self.get_value(row, "doc_typeIPS"),
                 source_uid=self.get_value(row, "pravogovruNd"),
@@ -184,11 +205,13 @@ class Command(BaseCommand):
                 raw_text=text,
                 source_name="RusLawOD",
                 max_fragments=remaining_fragments,
+                replace=replace,
             )
-            documents_created += 1 if document else 0
-            fragments_created += fragment_count
+            self.update_stats(stats, result, fragment_count)
+            if result in {"created", "replaced"}:
+                imported_documents += 1
 
-        return documents_created, fragments_created
+        return stats
 
     def create_document_with_fragments(
         self,
@@ -205,20 +228,56 @@ class Command(BaseCommand):
         heading="",
         source_name="RusLawOD",
         max_fragments=None,
+        replace=False,
     ):
+        raw_text = self.stringify_value(raw_text)
+        title = self.stringify_value(title)
+        document_type = self.stringify_value(document_type)
+        source_uid = self.stringify_value(source_uid)
+        status = self.stringify_value(status)
+        keywords = self.stringify_value(keywords)
+        classifier = self.stringify_value(classifier)
+        category_hint = self.stringify_value(category_hint)
+        article_number = self.stringify_value(article_number)
+        heading = self.stringify_value(heading)
+        source_name = self.stringify_value(source_name)
+
         if not raw_text or not raw_text.strip():
-            return None, 0
-        
-        document = LegalDocument.objects.create(
-            source_uid=source_uid[:255],
-            title=(title or "Без названия")[:500],
-            document_type=document_type[:255],
-            status=status[:255],
-            keywords=keywords,
-            classifier=classifier,
-            raw_text=raw_text,
-            source_name=source_name[:100],
-        )
+            return None, 0, "empty"
+
+        source_uid = source_uid[:255]
+        title = (title or "Без названия")[:500]
+        source_name = source_name[:100]
+        existing_query = {"source_name": source_name}
+        if source_uid:
+            existing_query["source_uid"] = source_uid
+        else:
+            existing_query["title"] = title
+
+        document = LegalDocument.objects.filter(**existing_query).first()
+        if document and not replace:
+            self.stdout.write(f"Пропущен дубль: {document}")
+            return document, 0, "duplicate"
+
+        document_values = {
+            "source_uid": source_uid,
+            "title": title,
+            "document_type": document_type[:255],
+            "status": status[:255],
+            "keywords": keywords,
+            "classifier": classifier,
+            "raw_text": raw_text,
+            "source_name": source_name,
+        }
+        if document:
+            for field, value in document_values.items():
+                setattr(document, field, value)
+            document.save()
+            document.fragments.all().delete()
+            result = "replaced"
+        else:
+            document = LegalDocument.objects.create(**document_values)
+            result = "created"
 
         fragments = split_text_to_fragments(raw_text)
         if max_fragments is not None:
@@ -239,11 +298,50 @@ class Command(BaseCommand):
             )
 
         LegalFragment.objects.bulk_create(fragment_objects)
-        return document, len(fragment_objects)
+        return document, len(fragment_objects), result
+
+    def update_stats(self, stats, result, fragment_count):
+        if result == "created":
+            stats["documents_created"] += 1
+        elif result == "duplicate":
+            stats["duplicates_skipped"] += 1
+        elif result == "empty":
+            stats["empty_skipped"] += 1
+
+        stats["fragments_created"] += fragment_count
+        self.report_progress(stats)
+
+    def report_progress(self, stats):
+        documents = stats["documents_created"]
+        fragments = stats["fragments_created"]
+        while documents >= stats["next_document_progress"]:
+            self.stdout.write(
+                f"Прогресс: создано документов: {stats['next_document_progress']}"
+            )
+            stats["next_document_progress"] += 10
+        while fragments >= stats["next_fragment_progress"]:
+            self.stdout.write(
+                f"Прогресс: создано фрагментов: {stats['next_fragment_progress']}"
+            )
+            stats["next_fragment_progress"] += 10
+
+    @staticmethod
+    def empty_stats():
+        return {
+            "documents_created": 0,
+            "duplicates_skipped": 0,
+            "fragments_created": 0,
+            "empty_skipped": 0,
+            "next_document_progress": 10,
+            "next_fragment_progress": 10,
+        }
 
     @staticmethod
     def get_value(row, key):
-        value = row.get(key, "")
+        return Command.stringify_value(row.get(key, ""))
+
+    @staticmethod
+    def stringify_value(value):
         if value is None:
             return ""
         if isinstance(value, str):

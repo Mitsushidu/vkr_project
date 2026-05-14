@@ -5,10 +5,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const messagesBox = document.getElementById("chat-messages");
   const textarea = form.querySelector("textarea");
   const submitButton = form.querySelector("button[type='submit']");
+  const defaultSubmitText = submitButton.textContent;
 
-  const appendBubble = (role, content, time, isError = false) => {
+  const appendBubble = (role, content, time, isError = false, extraClass = "") => {
     const article = document.createElement("article");
-    article.className = `chat-bubble ${role}${isError ? " error" : ""}`;
+    article.className = `chat-bubble ${role}${isError ? " error" : ""}${extraClass ? ` ${extraClass}` : ""}`;
     article.innerHTML = `
       <div class="chat-role">${role === "user" ? "Пользователь" : "Ассистент"}</div>
       <div class="chat-text"></div>
@@ -16,6 +17,17 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
     article.querySelector(".chat-text").textContent = content;
     messagesBox.appendChild(article);
+    messagesBox.scrollTop = messagesBox.scrollHeight;
+    return article;
+  };
+
+  const updateBubble = (article, content, time, isError = false) => {
+    article.classList.remove("loading", "typing", "error");
+    if (isError) {
+      article.classList.add("error");
+    }
+    article.querySelector(".chat-text").textContent = content;
+    article.querySelector(".chat-time").textContent = time;
     messagesBox.scrollTop = messagesBox.scrollHeight;
   };
 
@@ -37,6 +49,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     appendBubble("user", content, time);
+    const loadingBubble = appendBubble(
+      "assistant",
+      "Ассистент формирует ответ...",
+      time,
+      false,
+      "loading typing",
+    );
     textarea.value = "";
     submitButton.disabled = true;
     submitButton.textContent = "Отправка...";
@@ -57,17 +76,17 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error(fieldError || data.detail || "Ошибка обработки сообщения");
       }
 
-      appendBubble(
-        "assistant",
+      updateBubble(
+        loadingBubble,
         data.assistant_message.content,
         data.assistant_message.created_at,
         data.assistant_message.is_error,
       );
     } catch (error) {
-      appendBubble("assistant", `Ошибка: ${error.message}`, time, true);
+      updateBubble(loadingBubble, `Ошибка: ${error.message}`, time, true);
     } finally {
       submitButton.disabled = false;
-      submitButton.textContent = "Отправить";
+      submitButton.textContent = defaultSubmitText;
     }
   });
 });
