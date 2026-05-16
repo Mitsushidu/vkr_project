@@ -10,6 +10,8 @@ from typing import Any
 
 from django.conf import settings
 
+from knowledge.services import LegalRetrievalService, SearchResult
+
 from .models import ChatMessage, ConsultationCategory, ConsultationSession
 from .prompts import BASE_SYSTEM_PROMPT, PROMPTS
 
@@ -365,6 +367,7 @@ class ProcessedConsultationReply:
     analysis: ConsultationAnalysis
     llm_response: LLMResponse
     analysis_llm_response: LLMResponse | None = None
+    legal_results: list[SearchResult] | None = None
 
 
 class OllamaService:
@@ -1033,6 +1036,7 @@ class OllamaService:
         user_message: ChatMessage,
         *,
         after_clarification: bool = False,
+        legal_results: list[SearchResult] | None = None,
     ) -> LLMResponse:
         if not settings.OLLAMA_ENABLED:
             return cls._demo_generate_response(
@@ -1053,6 +1057,15 @@ class OllamaService:
             and after_clarification
         ):
             prompt_key = "after_clarification"
+
+        legal_context = ""
+        if analysis.scenario == ConsultationSession.AnalysisScenario.TYPICAL_ANSWER:
+            legal_context = LegalRetrievalService.format_sources_for_prompt(legal_results or [])
+            if not legal_context:
+                legal_context = (
+                    "Релевантные нормативные источники в базе не найдены. "
+                    "Не указывай конкретные статьи и законы без источников."
+                )
 
         cls._trace(
             "generation.request",
@@ -1076,6 +1089,8 @@ class OllamaService:
             user_message=user_message.content,
             clarification_answers=user_message.content,
         )
+        if legal_context:
+            prompt = f"{prompt}\n\nНормативные источники:\n{legal_context}"
         response = cls._perform_ollama_chat(cls._build_single_prompt_messages(prompt))
         cls._trace(
             "generation.response",
@@ -1118,17 +1133,26 @@ class OllamaService:
             missing_information=analysis.missing_information,
         )
         cls.apply_analysis_to_session(session, analysis)
+        legal_results = []
+        if analysis.scenario == ConsultationSession.AnalysisScenario.TYPICAL_ANSWER:
+            legal_results = LegalRetrievalService.search(
+                user_message.content,
+                category=analysis.category,
+                limit=5,
+            )
         llm_response = cls.generate_response_for_analysis(
             session,
             analysis,
             user_message,
             after_clarification=was_awaiting_clarification
             and analysis.scenario == ConsultationSession.AnalysisScenario.TYPICAL_ANSWER,
+            legal_results=legal_results,
         )
         return ProcessedConsultationReply(
             analysis=analysis,
             llm_response=llm_response,
             analysis_llm_response=analysis_llm_response,
+            legal_results=legal_results,
         )
 
     @classmethod

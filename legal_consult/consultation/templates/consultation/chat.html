@@ -107,6 +107,31 @@
                         <div class="chat-role">{{ item.get_role_display }}</div>
                         <div class="chat-text">{{ item.content|linebreaksbr }}</div>
                         <div class="chat-time">{{ item.created_at|date:"d.m.Y H:i" }}</div>
+                        {% if item.role == "assistant" %}
+                            {% with sources=item.legal_sources_as_response.all %}
+                                {% if sources %}
+                                    <div class="chat-sources">
+                                        <div class="chat-sources-title">Найденные источники</div>
+                                        <ol>
+                                            {% for source in sources %}
+                                                <li>
+                                                    {{ source.fragment.document.title }}
+                                                    {% if source.fragment.article_number %}, статья {{ source.fragment.article_number }}{% endif %}
+                                                    {% if source.fragment.heading %} — {{ source.fragment.heading }}{% endif %}
+                                                    {% with preview=source.fragment.text|striptags %}
+                                                        {% if preview %}
+                                                            <div class="chat-source-preview">
+                                                                Фрагмент: {{ preview|slice:":320" }}{% if preview|length > 320 %}...{% endif %}
+                                                            </div>
+                                                        {% endif %}
+                                                    {% endwith %}
+                                                </li>
+                                            {% endfor %}
+                                        </ol>
+                                    </div>
+                                {% endif %}
+                            {% endwith %}
+                        {% endif %}
                     </article>
                 {% empty %}
                     <div class="chat-placeholder">

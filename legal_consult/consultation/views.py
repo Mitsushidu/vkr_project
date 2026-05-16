@@ -7,6 +7,8 @@ from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
 from django.views.generic import DetailView, ListView, RedirectView
 
+from knowledge.services import ConsultationSourceService
+
 from .forms import (
     ChatMessageForm,
     ConsultationAssignmentForm,
@@ -102,7 +104,7 @@ class SessionDetailView(LoginRequiredMixin, DetailView):
     def get_queryset(self):
         queryset = ConsultationSession.objects.select_related(
             "category", "assigned_to", "user"
-        ).prefetch_related("messages")
+        ).prefetch_related("messages__legal_sources_as_response__fragment__document")
         return get_visible_consultations_queryset(self.request.user, queryset)
 
     def get_context_data(self, **kwargs):
@@ -280,6 +282,16 @@ def send_message_api(request, pk: int):
         content=llm_response.text,
         is_error=llm_response.status == "error",
     )
+    legal_sources = ConsultationSourceService.save_sources(
+        session,
+        user_message,
+        assistant_message,
+        processed_reply.legal_results or [],
+    )
+    serialized_sources = [
+        ConsultationSourceService.serialize_source(source)
+        for source in legal_sources
+    ]
 
     analysis_llm_response = processed_reply.analysis_llm_response
     if analysis_llm_response is not None:
@@ -314,6 +326,7 @@ def send_message_api(request, pk: int):
                 "content": assistant_message.content,
                 "created_at": assistant_message.created_at.strftime("%d.%m.%Y %H:%M"),
                 "is_error": assistant_message.is_error,
+                "sources": serialized_sources,
             },
             "session": {
                 "id": session.pk,

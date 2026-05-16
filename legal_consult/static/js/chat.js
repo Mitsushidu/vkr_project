@@ -8,6 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const defaultSubmitText = submitButton.textContent;
 
   const appendBubble = (role, content, time, isError = false, extraClass = "") => {
+    messagesBox.querySelector(".chat-placeholder")?.remove();
     const article = document.createElement("article");
     article.className = `chat-bubble ${role}${isError ? " error" : ""}${extraClass ? ` ${extraClass}` : ""}`;
     article.innerHTML = `
@@ -21,13 +22,45 @@ document.addEventListener("DOMContentLoaded", () => {
     return article;
   };
 
-  const updateBubble = (article, content, time, isError = false) => {
+  const renderSources = (article, sources = []) => {
+    article.querySelector(".chat-sources")?.remove();
+    if (!sources.length) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "chat-sources";
+    const title = document.createElement("div");
+    title.className = "chat-sources-title";
+    title.textContent = "Найденные источники";
+    wrapper.appendChild(title);
+
+    const list = document.createElement("ol");
+    sources.forEach((source) => {
+      const item = document.createElement("li");
+      const documentTitle = source.document_title || "Нормативный документ";
+      const article = source.article_number ? `, статья ${source.article_number}` : "";
+      const heading = source.heading ? ` — ${source.heading}` : "";
+      item.textContent = `${documentTitle}${article}${heading}`;
+      const previewText = source.preview || source.text || "";
+      if (previewText.trim()) {
+        const preview = document.createElement("div");
+        preview.className = "chat-source-preview";
+        preview.textContent = `Фрагмент: ${previewText}`;
+        item.appendChild(preview);
+      }
+      list.appendChild(item);
+    });
+    wrapper.appendChild(list);
+    article.appendChild(wrapper);
+  };
+
+  const updateBubble = (article, content, time, isError = false, sources = []) => {
     article.classList.remove("loading", "typing", "error");
     if (isError) {
       article.classList.add("error");
     }
     article.querySelector(".chat-text").textContent = content;
     article.querySelector(".chat-time").textContent = time;
+    renderSources(article, sources);
     messagesBox.scrollTop = messagesBox.scrollHeight;
   };
 
@@ -81,6 +114,7 @@ document.addEventListener("DOMContentLoaded", () => {
         data.assistant_message.content,
         data.assistant_message.created_at,
         data.assistant_message.is_error,
+        data.assistant_message.sources || [],
       );
     } catch (error) {
       updateBubble(loadingBubble, `Ошибка: ${error.message}`, time, true);
